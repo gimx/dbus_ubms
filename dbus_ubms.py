@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 
 """
-derived from dbusexample.py part of velib-python 
+derived from dbusexample.py part of velib-python
 A class to put a battery service on the dbus, according to victron standards, with constantly updating
- paths. The data acquisition is done on CAN bus and decodes Valence U-BMS messages. 
+paths. The data acquisition is done on CAN bus and decodes Valence U-BMS messages, in particular
+arbitration ID 0x0c4
 
 """
 import gobject
@@ -13,11 +14,24 @@ import logging
 import sys
 import os
 
+import can
+
 # our own packages
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), 'ext/velib_python'))
 from vedbus import VeDbusService
 
-class DbusDummyService:
+class CanbusDataAcquisition:
+    def __init__(self,interface):
+        self._bus = can.interface.Bus(channel=interface, bustype='socketcan')
+        self.soc = 0;
+        self.packvolatage = 0;
+        self.dischargecurrent = 0;
+        self.disschargecurrent = 0;
+        self.temperature = 0;
+
+
+
+class DbusBatteryService:
     def __init__(self, servicename, deviceinstance, paths, productname='V*lence U-BMS', connection='CAN bus'):
         self._dbusservice = VeDbusService(servicename)
         self._paths = paths
@@ -36,22 +50,26 @@ class DbusDummyService:
         self._dbusservice.add_path('/FirmwareVersion', 0)
         self._dbusservice.add_path('/HardwareVersion', 0)
         self._dbusservice.add_path('/Connected', 1)
-	#Create battery specific objects
-	self._dbusservice.add_path('/Dc/Voltage', dummy)
-	self._dbusservice.add_path('/Dc/Current', dummy)
-	self._dbusservice.add_path('/Dc/Power', dummy)
-	self._dbusservice.add_path('/Dc/Temperature', dummy)
-	self._dbusservice.add_path('/Dc/Soc', dummy)
-	self._dbusservice.add_path('/Dc/TimeToGo', dummy)
-	self._dbusservice.add_path('/Dc/ConsumedAmphours', dummy)
+        #Create battery specific objects
+        self._dbusservice.add_path('/Dc/Voltage', 24)
+        self._dbusservice.add_path('/Dc/Current', 4)
+        self._dbusservice.add_path('/Dc/Power', 100)
+        self._dbusservice.add_path('/Dc/Temperature', 25)
+        self._dbusservice.add_path('/Dc/Soc', 50)
+        #self._dbusservice.add_path('/Dc/TimeToGo', 10)A
 
         for path, settings in self._paths.iteritems():
             self._dbusservice.add_path(
                 path, settings['initial'], writeable=True, onchangecallback=self._handlechangedvalue)
 
+        self._ci = can.interface.Bus(channel='slcan0', bustype='socketcan')
+
         gobject.timeout_add(1000, self._update)
 
     def _update(self):
+        for message in self._ci:
+                print(message)
+
         for path, settings in self._paths.iteritems():
             if 'update' in settings:
                 self._dbusservice[path] = self._dbusservice[path] + settings['update']
@@ -69,7 +87,7 @@ class DbusDummyService:
 # To try this on commandline, start this program in one terminal, and try these commands
 # from another terminal:
 # dbus com.victronenergy.battery.ubms
-# dbus com.victronenergy.battery.ubms /Dc/0/Soc GetValue
+# dbus com.victronenergy.battery.ubms /Dc/Soc GetValue
 #
 
 def main():
@@ -79,7 +97,7 @@ def main():
     # Have a mainloop, so we can send/receive asynchronous calls to and from dbus
     DBusGMainLoop(set_as_default=True)
 
-    battery_output = DbusDummyService(
+    battery_output = DbusBatteryService(
         servicename='com.victronenergy.battery',
         deviceinstance=0,
         paths={
