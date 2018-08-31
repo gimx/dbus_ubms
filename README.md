@@ -14,8 +14,10 @@ git clone https://github.com/victronenergy/velib_python.git
 
 
 Developed using information from
+https://github.com/victronenergy/venus/wiki/howto-add-a-driver-to-Venus
+https://github.com/victronenergy/velib_python
+
 https://groups.google.com/forum/#!msg/victron-dev-venus/nCrpONiWYs0/-Z4wnkEJAAAJ;context-place=forum/victron-dev-venus
 
 /opt/victronenergy/vrmlogger/datalist.py
 
-velib-python
