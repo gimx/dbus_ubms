@@ -24,14 +24,20 @@ from vedbus import VeDbusService
 
 class UbmsBattery(can.Listener):
     def __init__(self):
-        self.soc = 0;
-        self.voltage = 0;
+        self.soc = 0
+        self.voltage = 0
 	self.current = 0
-        self.temperature = 0;
+        self.temperature = 0
+	self.underVoltageAlarm = 0
+	self.overVoltageAlarm = 0
+	self.overCurrentAlarm = 0
 
     def on_message_received(self, msg):
 	if msg.arbitration_id == 0xc0:
 		self.soc = msg.data[0]
+		self.underVoltageAlarm = msg.data[2] & 0x10
+		self.overVoltageAlarm = msg.data[2] & 0x20
+		self.overCurrentAlarm = msg.data[4] & 0x20
 		print("SOC: ",self.soc)
 
 	if msg.arbitration_id == 0xc1:
@@ -43,6 +49,11 @@ class UbmsBattery(can.Listener):
 		self.umax =  struct.unpack('<h', chr(msg.data[4])+chr(msg.data[5]))[0]*0.001
 		self.umin =  struct.unpack('<h', chr(msg.data[6])+chr(msg.data[7]))[0]*0.001
 		print("Umin ", self.umin, "Umax ", self.umax)
+
+        if msg.arbitration_id in [0x46a, 0x46b]:
+                self.moduleCurrent = struct.unpack('>hhhh', ''.join(chr(i) for i in msg.data))
+                print("I ", self.moduleCurrent)
+
 
 
 class DbusBatteryService:
@@ -65,12 +76,22 @@ class DbusBatteryService:
         self._dbusservice.add_path('/HardwareVersion', 0)
         self._dbusservice.add_path('/Connected', 1)
         # Create battery specific objects
-        self._dbusservice.add_path('/Dc/Voltage', 24)
-        self._dbusservice.add_path('/Dc/Current', 4)
-        self._dbusservice.add_path('/Dc/Power', 100)
+        self._dbusservice.add_path('/Dc/0/Voltage', 24)
+        self._dbusservice.add_path('/Dc/0/Current', 4)
+        self._dbusservice.add_path('/Soc', 50)
         self._dbusservice.add_path('/Dc/Temperature', 25)
-        self._dbusservice.add_path('/Dc/Soc', 50)
-        # self._dbusservice.add_path('/Dc/TimeToGo', 10)A
+        self._dbusservice.add_path('/Info/MaxChargeCurrent', 50)
+        self._dbusservice.add_path('/Info/MaxDischargeCurrent', 50)
+        self._dbusservice.add_path('/Alarms/LowVoltage', 50)
+        self._dbusservice.add_path('/Alarms/HighVoltage', 50)
+        self._dbusservice.add_path('/Alarms/LowSoc', 50)
+        self._dbusservice.add_path('/Alarms/LowTemperature', 50)
+        self._dbusservice.add_path('/Alarms/HighTemperature', 50)
+        self._dbusservice.add_path('/Balancing', 50)
+        self._dbusservice.add_path('/System/NrOfBatteries', 50)
+        self._dbusservice.add_path('/System/MinCellVoltage', 0.0)
+        self._dbusservice.add_path('/System/MaxCellVoltage', 4.2)
+
 
         for path, settings in self._paths.iteritems():
             self._dbusservice.add_path(
@@ -82,8 +103,9 @@ class DbusBatteryService:
         gobject.timeout_add(10, self._update)
 
     def _update(self):
-        self._dbusservice['/Dc/Soc'] = self._bat.soc 
-        self._dbusservice['/Dc/Current'] = self._bat.current 
+        self._dbusservice['/Soc'] = self._bat.soc 
+        self._dbusservice['/Dc/0/Current'] = self._bat.current 
+        self._dbusservice['/Dc/0/Voltage'] = self._bat.voltage 
         return True
 
     def _handlechangedvalue(self, path, value):
