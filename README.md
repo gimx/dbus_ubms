@@ -2,16 +2,13 @@
  CANBUS to dbus bridge for a Valence U-BMS to provide battery service on Victronenergy Venus OS
 
 ## Preparation on Raspi
-'''
+```
  sudo apt-get install libgtk2.0-dev  libdbus-1-dev libgirepository1.0-dev python-gobject python-can
  sudo pip install dbus-python can pygobject
-'''
-
-~~sudo vi /etc/dbus-1/system.d/com.victronenergy.dbus_ubms.conf
-sudo systemctl reload dbus
+```
 
 ## Preparation on CCGX
-'''
+```
  wget https://bootstrap.pypa.io/ez_setup.py
  python ez_setup.py
  easy_install python-can
@@ -20,7 +17,7 @@ sudo systemctl reload dbus
  git clone https://github.com/victronenergy/velib_python.git
  cd ..
  python dbus_ubms.py
-'''
+```
 
 ## Credits
  Majority of the protocol reverse engineering work was done by @cogito44 http://cogito44.free.fr
@@ -33,4 +30,4 @@ sudo systemctl reload dbus
 ## TODO
 - [ ] add input paramter for canbus I/F to and pack voltage scaling
 - [ ] determine number of connected modules
-- [ ] 
+
