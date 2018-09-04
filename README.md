@@ -21,11 +21,11 @@
 
 ## Credits
  - Majority of the protocol reverse engineering work was done by @cogito44 http://cogito44.free.fr
- - This code has been developed using information from the following sources
-   https://github.com/victronenergy/venus/wiki/howto-add-a-driver-to-Venus
-   https://github.com/victronenergy/velib_python
-   https://groups.google.com/forum/#!msg/victron-dev-venus/nCrpONiWYs0/-Z4wnkEJAAAJ;context-place=forum/victron-dev-venus
-   /opt/victronenergy/vrmlogger/datalist.py
+ - This code has been developed using information from the following (re-)sources
+   - https://github.com/victronenergy/venus/wiki/howto-add-a-driver-to-Venus
+   - https://github.com/victronenergy/velib_python
+   - https://groups.google.com/forum/#!msg/victron-dev-venus/nCrpONiWYs0/-Z4wnkEJAAAJ;context-place=forum/victron-dev-venus
+   - /opt/victronenergy/vrmlogger/datalist.py
 
 ## TODO
 - [ ] add input paramter for canbus I/F to and pack voltage scaling
