@@ -16,10 +16,13 @@ import os
 
 import can
 import struct
+from argparse import ArgumentParser
 
 # our own packages
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), 'ext/velib_python'))
 from vedbus import VeDbusService
+
+VERSION = '0.1'
 
 
 class UbmsBattery(can.Listener):
@@ -33,6 +36,8 @@ class UbmsBattery(can.Listener):
 	self.overCurrentAlarm = 0
 	self.maxCellVoltage = 3.0
 	self.minCellVoltage = 3.0
+	self.partnr = 0 
+	self.numberOfModules = 0
 
     def on_message_received(self, msg):
 	if msg.arbitration_id == 0xc0:
@@ -43,7 +48,7 @@ class UbmsBattery(can.Listener):
 		logging.debug("SOC: %d",self.soc)
 
 	elif msg.arbitration_id == 0xc1:
-                self.voltage = msg.data[0] * 2 #TODO make voltage scale factor input parameter
+                self.voltage = msg.data[0] * 4 #TODO make voltage scale factor input parameter
                 self.current = struct.unpack('b',chr(msg.data[1]))[0]
 		logging.debug("I: %dA U: %dV",self.current, self.voltage)
 
@@ -60,12 +65,20 @@ class UbmsBattery(can.Listener):
                 self.moduleSoc = struct.unpack('BBBBBBB', ''.join(chr(i) for i in msg.data[1:msg.dlc]))
                 logging.debug("mSoc ", self.moduleSoc)
 
+	elif msg.arbitration_id == 0x184:
+		if msg.data[0] != 0xFF:
+			if msg.data[1] == 1:
+                		self.partnr = bytearray.fromhex(msg.data[2:7]).decode() 
+				logging.info(self.partnr)
 
+			if  msg.data[0] > self.numberOfModules: 
+				self.numberOfModules = msg.data[0]
+				logging.info(self.numberOfModules)
 
 
 
 class DbusBatteryService:
-    def __init__(self, servicename, deviceinstance, productname='V*lence U-BMS', connection='CAN bus'):
+    def __init__(self, servicename, deviceinstance, productname='V*lence U-BMS', connection='can0'):
         self._dbusservice = VeDbusService(servicename)
 
         logging.debug("%s /DeviceInstance = %d" % (servicename, deviceinstance))
@@ -79,8 +92,8 @@ class DbusBatteryService:
         self._dbusservice.add_path('/DeviceInstance', deviceinstance)
         self._dbusservice.add_path('/ProductId', 0)
         self._dbusservice.add_path('/ProductName', productname)
-        self._dbusservice.add_path('/FirmwareVersion', 0)
-        self._dbusservice.add_path('/HardwareVersion', 0)
+        self._dbusservice.add_path('/FirmwareVersion', 'unknown')
+        self._dbusservice.add_path('/HardwareVersion', 'unknown')
         self._dbusservice.add_path('/Connected', 1)
         # Create battery specific objects
         self._dbusservice.add_path('/Dc/0/Voltage', 0)
@@ -96,7 +109,7 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Alarms/LowTemperature', 0)
         self._dbusservice.add_path('/Alarms/HighTemperature', 0)
         self._dbusservice.add_path('/Balancing', 0)
-#        self._dbusservice.add_path('/System/NrOfBatteries', 8)
+        self._dbusservice.add_path('/System/NrOfBatteries', 8)
         self._dbusservice.add_path('/System/MinCellVoltage', 0.0)
         self._dbusservice.add_path('/System/MaxCellVoltage', 4.2)
 
@@ -112,6 +125,16 @@ class DbusBatteryService:
 	else:
 		self._dbusservice['/Alarms/LowSoc'] = 0
 
+	if self._bat.underVoltageAlarm != 0:
+	 	self._dbusservice['/Alarms/LowVoltage'] = 1 
+	else:
+	 	self._dbusservice['/Alarms/LowVoltage'] = 0 
+
+ 	if self._bat.overVoltageAlarm:
+                self._dbusservice['/Alarms/HighVoltage'] = 1
+        else:
+                self._dbusservice['/Alarms/HighVoltage'] = 0
+
         self._dbusservice['/Soc'] = self._bat.soc 
         self._dbusservice['/Dc/0/Current'] = self._bat.current 
         self._dbusservice['/Dc/0/Voltage'] = self._bat.voltage 
@@ -121,8 +144,8 @@ class DbusBatteryService:
         return True
 
     def _handlechangedvalue(self, path, value):
-        logging.debug("someone else updated %s to %s" % (path, value))
-        return True # accept the change
+        logging.debug("someone else tried to update %s to %s" % (path, value))
+        return False # reject the change
 
 
 # === All code below is to simply run it from the commandline for debugging purposes ===
@@ -135,8 +158,22 @@ class DbusBatteryService:
 #
 
 def main():
-    #logging.basicConfig(level=logging.DEBUG)
-    logging.basicConfig(level=logging.INFO)
+    parser = ArgumentParser(description='dbus-modem', add_help=True)
+    parser.add_argument('-d', '--debug', help='enable debug logging',
+                        action='store_true')
+    parser.add_argument('-i', '--interface', help='CAN interface')
+
+    args = parser.parse_args()
+
+    logging.basicConfig(format='%(levelname)-8s %(message)s',
+                        level=(logging.DEBUG if args.debug else logging.INFO))
+
+    if not args.interface:
+        logging.error('No CAN interface specified, see -h')
+        exit(1)
+	
+    logging.info('Starting dbus_ubms %s on %s ' %
+             (VERSION, args.interface))
 
     from dbus.mainloop.glib import DBusGMainLoop
     # Have a mainloop, so we can send/receive asynchronous calls to and from dbus
@@ -144,6 +181,7 @@ def main():
 
     battery_output = DbusBatteryService(
         servicename='com.victronenergy.battery',
+	connection = args.interface, 	
         deviceinstance=0
         )
 
