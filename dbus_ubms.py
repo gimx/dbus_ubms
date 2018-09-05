@@ -4,7 +4,7 @@
 derived from dbusexample.py part of velib-python
 A class to put a battery service on the dbus, according to victron standards, with constantly updating
 paths. The data acquisition is done on CAN bus and decodes Valence U-BMS messages, in particular
-arbitration ID 0x0c4
+arbitration ID 0x0c0, 0xc1, 0xc4
 
 """
 import gobject
@@ -37,6 +37,7 @@ class UbmsBattery(can.Listener):
 	self.maxCellVoltage = 3.0
 	self.minCellVoltage = 3.0
 	self.partnr = 0 
+	self.firmwareVersion = 'unknown'
 	self.numberOfModules = 0
 
     def on_message_received(self, msg):
@@ -48,7 +49,7 @@ class UbmsBattery(can.Listener):
 		logging.debug("SOC: %d",self.soc)
 
 	elif msg.arbitration_id == 0xc1:
-                self.voltage = msg.data[0] * 4 #TODO make voltage scale factor input parameter
+                self.voltage = msg.data[0] * 1 #TODO make voltage scale factor input parameter
                 self.current = struct.unpack('b',chr(msg.data[1]))[0]
 		logging.debug("I: %dA U: %dV",self.current, self.voltage)
 
@@ -67,13 +68,14 @@ class UbmsBattery(can.Listener):
 
 	elif msg.arbitration_id == 0x184:
 		if msg.data[0] != 0xFF:
-			if msg.data[1] == 1:
-                		self.partnr = bytearray.fromhex(msg.data[2:7]).decode() 
-				logging.info(self.partnr)
+			#this is encoded battery information, not BMS 
+			if msg.data[1] == 1:#this is battery information, not BMS 
+                		self.partnr = msg.data[2:7].decode() 
+			elseif msg.data[1] == 2:
+				self.firmwareVersion = msg.data[2:7].decode()
 
 			if  msg.data[0] > self.numberOfModules: 
 				self.numberOfModules = msg.data[0]
-				logging.info(self.numberOfModules)
 
 
 
@@ -120,6 +122,9 @@ class DbusBatteryService:
         gobject.timeout_add(10, self._update)
 
     def _update(self):
+	self._dbusservice['/FirmwareVersion'] = self._bat.firmwareVersion
+	self._dbusservice['/HardwareVersion'] = self._bat.partnr
+	
 	if self._bat.soc < 10:
 		self._dbusservice['/Alarms/LowSoc'] = 1
 	else:
@@ -150,7 +155,7 @@ class DbusBatteryService:
 
 # === All code below is to simply run it from the commandline for debugging purposes ===
 
-# It will created a dbus service called com.victronenergy.battery.ubms.0
+# It will created a dbus service called com.victronenergy.battery
 # To try this on commandline, start this program in one terminal, and try these commands
 # from another terminal:
 # dbus com.victronenergy.battery.ubms
