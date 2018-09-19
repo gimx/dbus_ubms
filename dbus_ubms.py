@@ -22,7 +22,7 @@ from argparse import ArgumentParser
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), 'ext/velib_python'))
 from vedbus import VeDbusService
 
-VERSION = '0.1'
+VERSION = '0.2'
 
 
 class UbmsBattery(can.Listener):
@@ -31,9 +31,9 @@ class UbmsBattery(can.Listener):
         self.voltage = 0
 	self.current = 0
         self.temperature = 0
-	self.underVoltageAlarm = 0
-	self.overVoltageAlarm = 0
-	self.overCurrentAlarm = 0
+	self.voltageAlarms = 0
+	self.internalErrors = 0
+	self.currentAndTemperatureAlarms = 0
 	self.maxCellVoltage = 3.0
 	self.minCellVoltage = 3.0
 	self.partnr = 0 
@@ -43,20 +43,28 @@ class UbmsBattery(can.Listener):
     def on_message_received(self, msg):
 	if msg.arbitration_id == 0xc0:
 		self.soc = msg.data[0]
-		self.underVoltageAlarm = msg.data[2] & 0x10
-		self.overVoltageAlarm = msg.data[2] & 0x20
-		self.overCurrentAlarm = msg.data[4] & 0x20
-		logging.debug("SOC: %d",self.soc)
+		self.mode = msg.data[1]
+		self.voltageAlarms = msg.data[2]
+		self.internalErrors = msg.data[3]
+		self.currentAndTemperatureAlarms = msg.data[4]
+		self.numberOfModules = msg.data[5]
+		self.numberOfModulesBalancing = msg.data[6]
+#		logging.info("SOC: %d Mode: %X",self.soc, self.mode&0x1F)
 
 	elif msg.arbitration_id == 0xc1:
                 self.voltage = msg.data[0] * 1 #TODO make voltage scale factor input parameter
                 self.current = struct.unpack('b',chr(msg.data[1]))[0]
-		logging.debug("I: %dA U: %dV",self.current, self.voltage)
+#		logging.debug("I: %dA U: %dV",self.current, self.voltage)
+
+	elif msg.arbitration_id == 0xc2:
+                self.maxChargeCurrent = msg.data[0]
+                self.maxChargeVoltage = msg.data[1]
+#		logging.debug("Icmax %dA Ucmax %dV", self.maxChargeCurrent, self.maxChargeVoltage)
 
 	elif msg.arbitration_id == 0xc4:
-		self.maxCellVOltage =  struct.unpack('<h', chr(msg.data[4])+chr(msg.data[5]))[0]*0.001
+		self.maxCellVoltage =  struct.unpack('<h', chr(msg.data[4])+chr(msg.data[5]))[0]*0.001
 		self.minCellVoltage =  struct.unpack('<h', chr(msg.data[6])+chr(msg.data[7]))[0]*0.001
-		logging.debug("Umin %.3fV Umax %.3fV", self.minCellVoltage, self.maxCellVOltage)
+#		logging.info("Umin %.3fV Umax %.3fV", self.minCellVoltage, self.maxCellVoltage)
 
 #        elif msg.arbitration_id in [0x46a, 0x46b]:
 #                self.moduleCurrent = struct.unpack('>hhh', ''.join(chr(i) for i in msg.data[2:msg.dlc]))
@@ -73,9 +81,6 @@ class UbmsBattery(can.Listener):
 #                		self.partnr = msg.data[2:7].decode() 
 #			elif msg.data[1] == 2:
 #				self.firmwareVersion = msg.data[2:7].decode()
-#
-#			if  msg.data[0] > self.numberOfModules: 
-#				self.numberOfModules = msg.data[0]
 
 
 
@@ -101,17 +106,21 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Dc/0/Voltage', 0)
         self._dbusservice.add_path('/Dc/0/Power', 0)
         self._dbusservice.add_path('/Dc/0/Current', 0)
-        self._dbusservice.add_path('/Soc', 10)
+        self._dbusservice.add_path('/Soc', 11)
         self._dbusservice.add_path('/Dc/Temperature', 25)
         self._dbusservice.add_path('/Info/MaxChargeCurrent', 150)
         self._dbusservice.add_path('/Info/MaxDischargeCurrent', 150)
+	self._dbusservice.add_path('/Info/MaxChargeVoltage', 0)
+ 	self._dbusservice.add_path('/Alarms/CellImbalance', 0)
         self._dbusservice.add_path('/Alarms/LowVoltage', 0)
         self._dbusservice.add_path('/Alarms/HighVoltage', 0)
+ 	self._dbusservice.add_path('/Alarms/HighDischargeCurrent', 0)
+        self._dbusservice.add_path('/Alarms/HighChargeCurrent', 0)
         self._dbusservice.add_path('/Alarms/LowSoc', 0)
         self._dbusservice.add_path('/Alarms/LowTemperature', 0)
         self._dbusservice.add_path('/Alarms/HighTemperature', 0)
         self._dbusservice.add_path('/Balancing', 0)
-        self._dbusservice.add_path('/System/NrOfBatteries', 8)
+        self._dbusservice.add_path('/System/NrOfBatteries', 0)
         self._dbusservice.add_path('/System/MinCellVoltage', 3.0)
         self._dbusservice.add_path('/System/MaxCellVoltage', 4.2)
 
@@ -125,29 +134,24 @@ class DbusBatteryService:
 #	self._dbusservice['/FirmwareVersion'] = self._bat.firmwareVersion
 #	self._dbusservice['/HardwareVersion'] = self._bat.partnr
 	
-	if self._bat.soc < 5:
-		self._dbusservice['/Alarms/LowSoc'] = 2 
-	elif self._bat.soc < 10:
-		self._dbusservice['/Alarms/LowSoc'] = 1 
-	else:
-		self._dbusservice['/Alarms/LowSoc'] = 0
+	self._dbusservice['/Alarms/CellImbalance'] = (self._bat.internalErrors & 0x20)>>5 
+	self._dbusservice['/Alarms/LowVoltage'] =  (self._bat.voltageAlarms & 0x60)>>5
+        self._dbusservice['/Alarms/HighVoltage'] = (self._bat.voltageAlarms & 0x6)>>1 
+	self._dbusservice['/Alarms/LowSoc'] = (self._bat.voltageAlarms & 0x08)>>3 
+        self._dbusservice['/Alarms/HighDischargeCurrent'] = (self._bat.currentAndTemperatureAlarms & 0x3) 
 
-	if self._bat.underVoltageAlarm != 0:
-	 	self._dbusservice['/Alarms/LowVoltage'] = 2 
-	else:
-	 	self._dbusservice['/Alarms/LowVoltage'] = 0 
-
- 	if self._bat.overVoltageAlarm:
-                self._dbusservice['/Alarms/HighVoltage'] = 2 
-        else:
-                self._dbusservice['/Alarms/HighVoltage'] = 0
+	#general temperature alarm, whether high or low is unkown here
+        self._dbusservice['/Alarms/HighTemperature'] = (self._bat.currentAndTemperatureAlarms & 0x18)>>3
 
         self._dbusservice['/Soc'] = self._bat.soc 
+        self._dbusservice['/Balancing'] = self._bat.mode &0x10 
         self._dbusservice['/Dc/0/Current'] = self._bat.current 
         self._dbusservice['/Dc/0/Voltage'] = self._bat.voltage 
         self._dbusservice['/Dc/0/Power'] = self._bat.voltage * self._bat.current 
+        self._dbusservice['/System/MaxCellVoltage'] = self._bat.maxCellVoltage
 	self._dbusservice['/System/MinCellVoltage'] = self._bat.minCellVoltage
-        self._dbusservice['/System/MinCellVoltage'] = self._bat.maxCellVoltage
+	self._dbusservice['/Info/MaxChargeCurrent'] = self._bat.maxChargeCurrent
+	self._dbusservice['/Info/MaxChargeVoltage'] = self._bat.maxChargeVoltage
 	self._dbusservice['/System/NrOfBatteries'] =  self._bat.numberOfModules
         return True
 
