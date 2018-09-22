@@ -28,14 +28,21 @@ VERSION = '0.2'
 class UbmsBattery(can.Listener):
     def __init__(self):
         self.soc = 0
+	self.mode = 0
         self.voltage = 0
 	self.current = 0
         self.temperature = 0
-	self.voltageAlarms = 0
+	self.voltageAndCellTAlarms = 0
 	self.internalErrors = 0
-	self.currentAndTemperatureAlarms = 0
+	self.currentAndPcbTAlarms = 0
+	self.maxPcbTemperature = 0
+	self.maxCellTemperature = 0
+	self.minCellTemperature = 0
 	self.maxCellVoltage = 3.0
-	self.minCellVoltage = 3.0
+	self.minCellVoltage = 4.0
+	self.maxChargeVoltage = 29.2
+        self.maxChargeCurrent = 10
+	self.maxDischargeCurrent = 20
 	self.partnr = 0 
 	self.firmwareVersion = 'unknown'
 	self.numberOfModules = 0
@@ -44,9 +51,9 @@ class UbmsBattery(can.Listener):
 	if msg.arbitration_id == 0xc0:
 		self.soc = msg.data[0]
 		self.mode = msg.data[1]
-		self.voltageAlarms = msg.data[2]
+		self.voltageAndCellTAlarms = msg.data[2]
 		self.internalErrors = msg.data[3]
-		self.currentAndTemperatureAlarms = msg.data[4]
+		self.currentAndPcbTAlarms = msg.data[4]
 		self.numberOfModules = msg.data[5]
 		self.numberOfModulesBalancing = msg.data[6]
 #		logging.info("SOC: %d Mode: %X",self.soc, self.mode&0x1F)
@@ -54,14 +61,21 @@ class UbmsBattery(can.Listener):
 	elif msg.arbitration_id == 0xc1:
                 self.voltage = msg.data[0] * 1 #TODO make voltage scale factor input parameter
                 self.current = struct.unpack('b',chr(msg.data[1]))[0]
+		self.maxDischargeCurrent =  struct.unpack('<h', chr(msg.data[3])+chr(msg.data[4]))[0]
+		self.maxChargeCurrent =  struct.unpack('<h', chr(msg.data[5])+chr(msg.data[7]))[0]
+#		logging.info("Icmax %dA Idmax %dA", self.maxChargeCurrent, self.maxDischargeCurrent)
 #		logging.debug("I: %dA U: %dV",self.current, self.voltage)
 
-	elif msg.arbitration_id == 0xc2:
+	elif msg.arbitration_id == 0xc2: #works only in charge mode
                 self.maxChargeCurrent = msg.data[0]
                 self.maxChargeVoltage = msg.data[1]
-#		logging.debug("Icmax %dA Ucmax %dV", self.maxChargeCurrent, self.maxChargeVoltage)
+		logging.info("CCL: %d CV: %d",self.maxChargeCurrent, self.maxChargeVoltage)
 
 	elif msg.arbitration_id == 0xc4:
+		self.maxCellTemperature =  msg.data[0]-40
+                self.minCellTemperature =  msg.data[1]-40
+                self.minPcbTemperature =  msg.data[3]-40
+#               
 		self.maxCellVoltage =  struct.unpack('<h', chr(msg.data[4])+chr(msg.data[5]))[0]*0.001
 		self.minCellVoltage =  struct.unpack('<h', chr(msg.data[6])+chr(msg.data[7]))[0]*0.001
 #		logging.info("Umin %.3fV Umax %.3fV", self.minCellVoltage, self.maxCellVoltage)
@@ -81,6 +95,15 @@ class UbmsBattery(can.Listener):
 #                		self.partnr = msg.data[2:7].decode() 
 #			elif msg.data[1] == 2:
 #				self.firmwareVersion = msg.data[2:7].decode()
+
+    def _print(self):
+        print("SOC:", self.soc, "%"
+        	"I:", self.current, "A", 
+		"U:", self.voltage, "V",
+		"T:", self.maxCellTemperature, "degC")
+	print("Umin:", self.minCellVoltage, "Umax:", self.maxCellVoltage)
+
+        return True
 
 
 
@@ -107,10 +130,10 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Dc/0/Power', 0)
         self._dbusservice.add_path('/Dc/0/Current', 0)
         self._dbusservice.add_path('/Soc', 11)
-        self._dbusservice.add_path('/Dc/Temperature', 25)
-        self._dbusservice.add_path('/Info/MaxChargeCurrent', 150)
+        self._dbusservice.add_path('/Dc/0/Temperature', 25)
+        self._dbusservice.add_path('/Info/MaxChargeCurrent', 70)
         self._dbusservice.add_path('/Info/MaxDischargeCurrent', 150)
-	self._dbusservice.add_path('/Info/MaxChargeVoltage', 0)
+#	self._dbusservice.add_path('/Info/MaxChargeVoltage', 0)
  	self._dbusservice.add_path('/Alarms/CellImbalance', 0)
         self._dbusservice.add_path('/Alarms/LowVoltage', 0)
         self._dbusservice.add_path('/Alarms/HighVoltage', 0)
@@ -125,7 +148,8 @@ class DbusBatteryService:
         self._dbusservice.add_path('/System/MaxCellVoltage', 4.2)
 
 
-        self._ci = can.interface.Bus(channel=connection, bustype='socketcan', can_filters=[{"can_id": 0x0cf, "can_mask": 0xff0}])
+        self._ci = can.interface.Bus(channel=connection, bustype='socketcan', 
+					can_filters=[{"can_id": 0x0c0, "can_mask": 0xf2}])
 	self._bat = UbmsBattery() 
 	notifier = can.Notifier(self._ci, [self._bat])
         gobject.timeout_add(1000, self._update)
@@ -135,25 +159,30 @@ class DbusBatteryService:
 #	self._dbusservice['/HardwareVersion'] = self._bat.partnr
 	
 	self._dbusservice['/Alarms/CellImbalance'] = (self._bat.internalErrors & 0x20)>>5 
-	self._dbusservice['/Alarms/LowVoltage'] =  (self._bat.voltageAlarms & 0x60)>>5
-        self._dbusservice['/Alarms/HighVoltage'] = (self._bat.voltageAlarms & 0x6)>>1 
-	self._dbusservice['/Alarms/LowSoc'] = (self._bat.voltageAlarms & 0x08)>>3 
-        self._dbusservice['/Alarms/HighDischargeCurrent'] = (self._bat.currentAndTemperatureAlarms & 0x3) 
+	self._dbusservice['/Alarms/LowVoltage'] =  (self._bat.voltageAndCellTAlarms & 0x60)>>5
+        self._dbusservice['/Alarms/HighVoltage'] = (self._bat.voltageAndCellTAlarms & 0x6)>>1 
+	self._dbusservice['/Alarms/LowSoc'] = (self._bat.voltageAndCellTAlarms & 0x08)>>3 
+        self._dbusservice['/Alarms/HighDischargeCurrent'] = (self._bat.currentAndPcbTAlarms & 0x3) 
 
-	#general temperature alarm, whether high or low is unkown here
-        self._dbusservice['/Alarms/HighTemperature'] = (self._bat.currentAndTemperatureAlarms & 0x18)>>3
+#        self._dbusservice['/Alarms/HighTemperature'] = (self._bat.currentAndPcbTAlarms & 0x18)>>3  
+	self._dbusservice['/Alarms/HighTemperature'] =	(self._bat.voltageAndCellTAlarms &0x6)>>1
+
+        self._dbusservice['/Alarms/LowTemperature'] = (self._bat.voltageAndCellTAlarms & 0x60)>>5 
 
         self._dbusservice['/Soc'] = self._bat.soc 
-        self._dbusservice['/Balancing'] = self._bat.mode &0x10 
+#	self._dbusservice['/Balancing'] = self._bat.mode &0x10 
         self._dbusservice['/Dc/0/Current'] = self._bat.current 
         self._dbusservice['/Dc/0/Voltage'] = self._bat.voltage 
         self._dbusservice['/Dc/0/Power'] = self._bat.voltage * self._bat.current 
+        self._dbusservice['/Dc/0/Temperature'] = self._bat.maxCellTemperature 
         self._dbusservice['/System/MaxCellVoltage'] = self._bat.maxCellVoltage
 	self._dbusservice['/System/MinCellVoltage'] = self._bat.minCellVoltage
 	self._dbusservice['/Info/MaxChargeCurrent'] = self._bat.maxChargeCurrent
-	self._dbusservice['/Info/MaxChargeVoltage'] = self._bat.maxChargeVoltage
+	self._dbusservice['/Info/MaxDischargeCurrent'] = self._bat.maxDischargeCurrent
+#	self._dbusservice['/Info/MaxChargeVoltage'] = self._bat.maxChargeVoltage
 	self._dbusservice['/System/NrOfBatteries'] =  self._bat.numberOfModules
         return True
+
 
     def _handlechangedvalue(self, path, value):
         logging.debug("someone else tried to update %s to %s" % (path, value))
@@ -168,10 +197,11 @@ class DbusBatteryService:
 # dbus -y com.victronenergy.battery /Dc/Soc GetValue
 
 def main():
-    parser = ArgumentParser(description='dbus-modem', add_help=True)
+    parser = ArgumentParser(description='dbus_ubms', add_help=True)
     parser.add_argument('-d', '--debug', help='enable debug logging',
                         action='store_true')
     parser.add_argument('-i', '--interface', help='CAN interface')
+    parser.add_argument('-p', '--print', help='print only')
 
     args = parser.parse_args()
 
