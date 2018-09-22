@@ -26,6 +26,13 @@ VERSION = '0.2'
 
 
 class UbmsBattery(can.Listener):
+    opModes = {
+	1:"Charge",
+	2:"Drive",	
+	4:"Equalize",
+	8:"Float"
+	}
+
     def __init__(self):
         self.soc = 0
 	self.mode = 0
@@ -69,13 +76,12 @@ class UbmsBattery(can.Listener):
 	elif msg.arbitration_id == 0xc2: #works only in charge mode
                 self.maxChargeCurrent = msg.data[0]
                 self.maxChargeVoltage = msg.data[1]
-		logging.info("CCL: %d CV: %d",self.maxChargeCurrent, self.maxChargeVoltage)
+#		logging.info("CCL: %d CV: %d",self.maxChargeCurrent, self.maxChargeVoltage)
 
 	elif msg.arbitration_id == 0xc4:
 		self.maxCellTemperature =  msg.data[0]-40
                 self.minCellTemperature =  msg.data[1]-40
                 self.minPcbTemperature =  msg.data[3]-40
-#               
 		self.maxCellVoltage =  struct.unpack('<h', chr(msg.data[4])+chr(msg.data[5]))[0]*0.001
 		self.minCellVoltage =  struct.unpack('<h', chr(msg.data[6])+chr(msg.data[7]))[0]*0.001
 #		logging.info("Umin %.3fV Umax %.3fV", self.minCellVoltage, self.maxCellVoltage)
@@ -88,13 +94,6 @@ class UbmsBattery(can.Listener):
 #                self.moduleSoc = struct.unpack('BBBBBBB', ''.join(chr(i) for i in msg.data[1:msg.dlc]))
 #                logging.debug("mSoc ", self.moduleSoc)
 
-#	elif msg.arbitration_id == 0x184:
-#		if msg.data[0] != 0xFF:
-#			#this is encoded battery information, not BMS 
-#			if msg.data[1] == 1: 
-#                		self.partnr = msg.data[2:7].decode() 
-#			elif msg.data[1] == 2:
-#				self.firmwareVersion = msg.data[2:7].decode()
 
     def _print(self):
         print("SOC:", self.soc, "%"
@@ -130,6 +129,7 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Dc/0/Power', 0)
         self._dbusservice.add_path('/Dc/0/Current', 0)
         self._dbusservice.add_path('/Soc', 11)
+#        self._dbusservice.add_path('/TimeToGo', 0)
         self._dbusservice.add_path('/Dc/0/Temperature', 25)
         self._dbusservice.add_path('/Info/MaxChargeCurrent', 70)
         self._dbusservice.add_path('/Info/MaxDischargeCurrent', 150)
@@ -142,6 +142,7 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Alarms/LowSoc', 0)
         self._dbusservice.add_path('/Alarms/LowTemperature', 0)
         self._dbusservice.add_path('/Alarms/HighTemperature', 0)
+        self._dbusservice.add_path('/State', 0)
         self._dbusservice.add_path('/Balancing', 0)
         self._dbusservice.add_path('/System/NrOfBatteries', 0)
         self._dbusservice.add_path('/System/MinCellVoltage', 3.0)
@@ -170,7 +171,8 @@ class DbusBatteryService:
         self._dbusservice['/Alarms/LowTemperature'] = (self._bat.voltageAndCellTAlarms & 0x60)>>5 
 
         self._dbusservice['/Soc'] = self._bat.soc 
-#	self._dbusservice['/Balancing'] = self._bat.mode &0x10 
+	self._dbusservice['/Balancing'] = self._bat.mode &0x10 
+        self._dbusservice['/State'] =  UbmsBattery.opModes[self._bat.mode&0xC] 
         self._dbusservice['/Dc/0/Current'] = self._bat.current 
         self._dbusservice['/Dc/0/Voltage'] = self._bat.voltage 
         self._dbusservice['/Dc/0/Power'] = self._bat.voltage * self._bat.current 
