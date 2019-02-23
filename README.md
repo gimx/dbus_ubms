@@ -2,6 +2,12 @@
  CANBUS to dbus bridge for a Valence U-BMS to provide battery monitor service on Victronenergy Venus OS
 
  Use this code at your own risk.
+## Installation
+```
+ git clone https://github.com/gimx/dbus_ubms.git
+ cd dbus_ubms/ext
+ git clone https://github.com/victronenergy/velib_python.git
+```
 
 ## Preparation on Raspi
 ```
@@ -11,14 +17,12 @@
 
 ## Preparation on CCGX
 ```
- wget https://bootstrap.pypa.io/ez_setup.py
- python ez_setup.py
- easy_install python-can
- git clone https://github.com/gimx/dbus_ubms.git
- cd dbus_ubms/ext
- git clone https://github.com/victronenergy/velib_python.git
- cd ..
- python dbus_ubms.py -i can0
+ dbus_ubms/prep_dbus.sh
+```
+
+## Run
+```
+ python dbus/dbus_ubms.py -i can0
 ```
 
 ## Credits
