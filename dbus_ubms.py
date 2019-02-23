@@ -74,15 +74,15 @@ class UbmsBattery(can.Listener):
 #		logging.info("Icmax %dA Idmax %dA", self.maxChargeCurrent, self.maxDischargeCurrent)
 #		logging.debug("I: %dA U: %dV",self.current, self.voltage)
 
-	elif msg.arbitration_id == 0xc2: #works only in charge mode
-                self.maxChargeCurrent = msg.data[0]
-                self.maxChargeVoltage = msg.data[1]
+#	elif msg.arbitration_id == 0xc2: #works only in charge mode
+#                self.maxChargeCurrent = msg.data[0]
+#                self.maxChargeVoltage = msg.data[1]
 #		logging.info("CCL: %d CV: %d",self.maxChargeCurrent, self.maxChargeVoltage)
 
 	elif msg.arbitration_id == 0xc4:
 		self.maxCellTemperature =  msg.data[0]-40
                 self.minCellTemperature =  msg.data[1]-40
-                self.minPcbTemperature =  msg.data[3]-40
+                self.maxPcbTemperature =  msg.data[3]-40
 		self.maxCellVoltage =  struct.unpack('<h', chr(msg.data[4])+chr(msg.data[5]))[0]*0.001
 		self.minCellVoltage =  struct.unpack('<h', chr(msg.data[6])+chr(msg.data[7]))[0]*0.001
 #		logging.info("Umin %.3fV Umax %.3fV", self.minCellVoltage, self.maxCellVoltage)
@@ -147,6 +147,9 @@ class DbusBatteryService:
         self._dbusservice.add_path('/System/NrOfBatteries', 0)
         self._dbusservice.add_path('/System/MinCellVoltage', 3.0)
         self._dbusservice.add_path('/System/MaxCellVoltage', 4.2)
+        self._dbusservice.add_path('/System/MinCellTemperature', 10.0)
+        self._dbusservice.add_path('/System/MaxCellTemperature', 10.0)
+        self._dbusservice.add_path('/System/MaxPcbTemperature', 10.0)
 
 
         self._ci = can.interface.Bus(channel=connection, bustype='socketcan', 
@@ -177,6 +180,9 @@ class DbusBatteryService:
         self._dbusservice['/Dc/0/Temperature'] = self._bat.maxCellTemperature 
         self._dbusservice['/System/MaxCellVoltage'] = self._bat.maxCellVoltage
 	self._dbusservice['/System/MinCellVoltage'] = self._bat.minCellVoltage
+	self._dbusservice['/System/MinCellTemperature'] = self._bat.minCellTemperature
+	self._dbusservice['/System/MaxCellTemperature'] = self._bat.maxCellTemperature
+	self._dbusservice['/System/MaxPcbTemperature'] = self._bat.maxPcbTemperature
 	self._dbusservice['/Info/MaxChargeCurrent'] = self._bat.maxChargeCurrent
 	self._dbusservice['/Info/MaxDischargeCurrent'] = self._bat.maxDischargeCurrent
 #	self._dbusservice['/Info/MaxChargeVoltage'] = self._bat.maxChargeVoltage
