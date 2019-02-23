@@ -22,7 +22,7 @@ from argparse import ArgumentParser
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), 'ext/velib_python'))
 from vedbus import VeDbusService
 
-VERSION = '0.2'
+VERSION = '0.3'
 
 
 class UbmsBattery(can.Listener):
@@ -53,6 +53,7 @@ class UbmsBattery(can.Listener):
 	self.partnr = 0 
 	self.firmwareVersion = 'unknown'
 	self.numberOfModules = 0
+	self.numberOfModulesBalancing = 0
 
     def on_message_received(self, msg):
 	if msg.arbitration_id == 0xc0:
@@ -142,7 +143,6 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Alarms/LowSoc', 0)
         self._dbusservice.add_path('/Alarms/LowTemperature', 0)
         self._dbusservice.add_path('/Alarms/HighTemperature', 0)
-        self._dbusservice.add_path('/State', 0)
         self._dbusservice.add_path('/Balancing', 0)
         self._dbusservice.add_path('/System/NrOfBatteries', 0)
         self._dbusservice.add_path('/System/MinCellVoltage', 3.0)
@@ -153,26 +153,24 @@ class DbusBatteryService:
 					can_filters=[{"can_id": 0x0c0, "can_mask": 0xf2}])
 	self._bat = UbmsBattery() 
 	notifier = can.Notifier(self._ci, [self._bat])
-        gobject.timeout_add(1000, self._update)
+        gobject.timeout_add(100, self._update)
 
     def _update(self):
 #	self._dbusservice['/FirmwareVersion'] = self._bat.firmwareVersion
 #	self._dbusservice['/HardwareVersion'] = self._bat.partnr
 	
 	self._dbusservice['/Alarms/CellImbalance'] = (self._bat.internalErrors & 0x20)>>5 
-	self._dbusservice['/Alarms/LowVoltage'] =  (self._bat.voltageAndCellTAlarms & 0x60)>>5
-        self._dbusservice['/Alarms/HighVoltage'] = (self._bat.voltageAndCellTAlarms & 0x6)>>1 
+	self._dbusservice['/Alarms/LowVoltage'] =  (self._bat.voltageAndCellTAlarms & 0x10)>>3 
+        self._dbusservice['/Alarms/HighVoltage'] =  (self._bat.voltageAndCellTAlarms & 0x20)>>4 
 	self._dbusservice['/Alarms/LowSoc'] = (self._bat.voltageAndCellTAlarms & 0x08)>>3 
         self._dbusservice['/Alarms/HighDischargeCurrent'] = (self._bat.currentAndPcbTAlarms & 0x3) 
 
 #        self._dbusservice['/Alarms/HighTemperature'] = (self._bat.currentAndPcbTAlarms & 0x18)>>3  
 	self._dbusservice['/Alarms/HighTemperature'] =	(self._bat.voltageAndCellTAlarms &0x6)>>1
-
-        self._dbusservice['/Alarms/LowTemperature'] = (self._bat.voltageAndCellTAlarms & 0x60)>>5 
+        self._dbusservice['/Alarms/LowTemperature'] = (self._bat.mode & 0x60)>>5 
 
         self._dbusservice['/Soc'] = self._bat.soc 
-	self._dbusservice['/Balancing'] = self._bat.mode &0x10 
-        self._dbusservice['/State'] =  UbmsBattery.opModes[self._bat.mode&0xC] 
+	self._dbusservice['/Balancing'] = (self._bat.mode &0x10)>>4 
         self._dbusservice['/Dc/0/Current'] = self._bat.current 
         self._dbusservice['/Dc/0/Voltage'] = self._bat.voltage 
         self._dbusservice['/Dc/0/Power'] = self._bat.voltage * self._bat.current 
@@ -187,8 +185,14 @@ class DbusBatteryService:
 
 
     def _handlechangedvalue(self, path, value):
-        logging.debug("someone else tried to update %s to %s" % (path, value))
-        return False # reject the change
+	try:
+	   self._dbusservice[path] = value	
+	except :
+	   print "Unexpected error:", sys.exc_info()[0]	
+           return False # reject the change
+	
+        logging.info("someone else tried to update %s to %s" % (path, value))
+        return True # accept the change
 
 
 # === All code below is to simply run it from the commandline for debugging purposes ===
