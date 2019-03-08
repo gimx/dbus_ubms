@@ -130,11 +130,12 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Dc/0/Power', 0)
         self._dbusservice.add_path('/Dc/0/Current', 0)
         self._dbusservice.add_path('/Soc', 11)
-#        self._dbusservice.add_path('/TimeToGo', 0)
+        self._dbusservice.add_path('/TimeToGo', 600)
         self._dbusservice.add_path('/Dc/0/Temperature', 25)
         self._dbusservice.add_path('/Info/MaxChargeCurrent', 70)
         self._dbusservice.add_path('/Info/MaxDischargeCurrent', 150)
-#	self._dbusservice.add_path('/Info/MaxChargeVoltage', 0)
+	self._dbusservice.add_path('/Info/MaxChargeVoltage', 29.2)
+	self._dbusservice.add_path('/Info/BatteryLowVoltage', 24.0)
  	self._dbusservice.add_path('/Alarms/CellImbalance', 0)
         self._dbusservice.add_path('/Alarms/LowVoltage', 0)
         self._dbusservice.add_path('/Alarms/HighVoltage', 0)
@@ -173,6 +174,11 @@ class DbusBatteryService:
         self._dbusservice['/Alarms/LowTemperature'] = (self._bat.mode & 0x60)>>5 
 
         self._dbusservice['/Soc'] = self._bat.soc 
+	if(self._bat.current >= 0):
+        	self._dbusservice['/TimeToGo'] = self._bat.soc*550*36
+        else:
+		self._dbusservice['/TimeToGo'] = self._bat.soc*550*36/(-self._bat.current)
+
 	self._dbusservice['/Balancing'] = (self._bat.mode &0x10)>>4 
         self._dbusservice['/Dc/0/Current'] = self._bat.current 
         self._dbusservice['/Dc/0/Voltage'] = self._bat.voltage 
