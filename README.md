@@ -23,6 +23,8 @@
 ## Run
 ```
  python dbus/dbus_ubms.py -i can0
+ or
+ nohup python dbus/dbus_ubms.py -i can0 &
 ```
 
 ## Credits
