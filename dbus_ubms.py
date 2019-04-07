@@ -23,8 +23,7 @@ from argparse import ArgumentParser
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), 'ext/velib_python'))
 from vedbus import VeDbusService
 
-VERSION = '0.4'
-
+VERSION = '0.5'
 
 class UbmsBattery(can.Listener):
     opModes = {
@@ -34,10 +33,9 @@ class UbmsBattery(can.Listener):
 	8:"Float"
 	}
 
-    def __init__(self):
-	# adjust the next two lines to match your battery
-	self.capacity = 550 # Ah
-	self.maxChargeVoltage = 29.0
+    def __init__(self, voltage, capacity):
+	self.capacity = capacity # Ah
+	self.maxChargeVoltage = voltage 
         self.soc = 0
 	self.mode = 0
         self.voltage = 0
@@ -119,7 +117,7 @@ class UbmsBattery(can.Listener):
 
 
 class DbusBatteryService:
-    def __init__(self, servicename, deviceinstance, productname='V*lence U-BMS', connection='can0'):
+    def __init__(self, servicename, deviceinstance, voltage, capacity, productname='V*lence U-BMS', connection='can0'):
         self._dbusservice = VeDbusService(servicename)
 
         logging.debug("%s /DeviceInstance = %d" % (servicename, deviceinstance))
@@ -145,7 +143,7 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Dc/0/Temperature', 25)
         self._dbusservice.add_path('/Info/MaxChargeCurrent', 70)
         self._dbusservice.add_path('/Info/MaxDischargeCurrent', 150)
-	self._dbusservice.add_path('/Info/MaxChargeVoltage', 29.0)
+	self._dbusservice.add_path('/Info/MaxChargeVoltage', voltage)
 	self._dbusservice.add_path('/Info/BatteryLowVoltage', 24.0)
  	self._dbusservice.add_path('/Alarms/CellImbalance', 0)
         self._dbusservice.add_path('/Alarms/LowVoltage', 0)
@@ -166,7 +164,7 @@ class DbusBatteryService:
 
         self._ci = can.interface.Bus(channel=connection, bustype='socketcan', 
 					can_filters=[{"can_id": 0x0cf, "can_mask": 0xff0}])
-	self._bat = UbmsBattery() 
+	self._bat = UbmsBattery(capacity=capacity, voltage=voltage) 
 	notifier = can.Notifier(self._ci, [self._bat])
         gobject.timeout_add(50, self._update)
 
@@ -241,6 +239,8 @@ def main():
     parser.add_argument('-d', '--debug', help='enable debug logging',
                         action='store_true')
     parser.add_argument('-i', '--interface', help='CAN interface')
+    parser.add_argument('-c', '--capacity', help='capacity in Ah')
+    parser.add_argument('-v', '--voltage', help='maximum charge voltage V')
     parser.add_argument('-p', '--print', help='print only')
 
     args = parser.parse_args()
@@ -249,8 +249,16 @@ def main():
                         level=(logging.DEBUG if args.debug else logging.INFO))
 
     if not args.interface:
-        logging.error('No CAN interface specified, see -h')
-        exit(1)
+        logging.info('No CAN interface specified, using default can0')
+	args.interface = 'can0'
+
+    if not args.capacity:
+        logging.info('Battery capacity not specified, using default (550Ah)')
+	args.capacity = 550
+
+    if not args.voltage:
+        logging.info('Maximum charge voltage not specified, using default 14.5V')
+	args.voltage = 14.5
 	
     logging.info('Starting dbus_ubms %s on %s ' %
              (VERSION, args.interface))
@@ -262,7 +270,9 @@ def main():
     battery_output = DbusBatteryService(
         servicename='com.victronenergy.battery',
 	connection = args.interface, 	
-        deviceinstance=0
+        deviceinstance=0,
+	capacity = args.capacity,
+	voltage = args.voltage
         )
 
     logging.info('Connected to dbus, and switching over to gobject.MainLoop() (= event based)')
