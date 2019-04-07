@@ -37,7 +37,7 @@ class UbmsBattery(can.Listener):
     def __init__(self):
 	# adjust the next two lines to match your battery
 	self.capacity = 550 # Ah
-	self.maxChargeVoltage = 29.2
+	self.maxChargeVoltage = 29.0
         self.soc = 0
 	self.mode = 0
         self.voltage = 0
@@ -126,7 +126,7 @@ class DbusBatteryService:
 
         # Create the management objects, as specified in the ccgx dbus-api document
         self._dbusservice.add_path('/Mgmt/ProcessName', __file__)
-        self._dbusservice.add_path('/Mgmt/ProcessVersion', 'Unkown version, and running on Python ' + platform.python_version())
+        self._dbusservice.add_path('/Mgmt/ProcessVersion', VERSION + ' running on Python ' + platform.python_version())
         self._dbusservice.add_path('/Mgmt/Connection', connection)
 
         # Create the mandatory objects
@@ -145,7 +145,7 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Dc/0/Temperature', 25)
         self._dbusservice.add_path('/Info/MaxChargeCurrent', 70)
         self._dbusservice.add_path('/Info/MaxDischargeCurrent', 150)
-	self._dbusservice.add_path('/Info/MaxChargeVoltage', 29.2)
+	self._dbusservice.add_path('/Info/MaxChargeVoltage', 29.0)
 	self._dbusservice.add_path('/Info/BatteryLowVoltage', 24.0)
  	self._dbusservice.add_path('/Alarms/CellImbalance', 0)
         self._dbusservice.add_path('/Alarms/LowVoltage', 0)
