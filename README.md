@@ -17,7 +17,7 @@
 
 ## Preparation on CCGX
 ```
- dbus_ubms/prep_dbus.sh
+ dbus_ubms/prep_ubms.sh
 ```
 
 ## Run

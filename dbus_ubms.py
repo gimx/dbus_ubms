@@ -4,7 +4,8 @@
 derived from dbusexample.py part of velib-python
 A class to put a battery service on the dbus, according to victron standards, with constantly updating
 paths. The data acquisition is done on CAN bus and decodes Valence U-BMS messages, in particular
-arbitration ID 0x0c0, 0xc1, 0xc4
+arbitration ID 0xc0, 0xc2, 0xc1, 0xc4
+The BMS should be operated in Charge mode, ie AUX2 connected to +12V
 
 """
 import gobject
@@ -22,7 +23,7 @@ from argparse import ArgumentParser
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), 'ext/velib_python'))
 from vedbus import VeDbusService
 
-VERSION = '0.3'
+VERSION = '0.4'
 
 
 class UbmsBattery(can.Listener):
@@ -34,6 +35,9 @@ class UbmsBattery(can.Listener):
 	}
 
     def __init__(self):
+	# adjust the next two lines to match your battery
+	self.capacity = 550 # Ah
+	self.maxChargeVoltage = 29.2
         self.soc = 0
 	self.mode = 0
         self.voltage = 0
@@ -45,11 +49,10 @@ class UbmsBattery(can.Listener):
 	self.maxPcbTemperature = 0
 	self.maxCellTemperature = 0
 	self.minCellTemperature = 0
-	self.maxCellVoltage = 3.0
-	self.minCellVoltage = 4.0
-	self.maxChargeVoltage = 29.2
-        self.maxChargeCurrent = 10
-	self.maxDischargeCurrent = 20
+	self.maxCellVoltage = 3.2
+	self.minCellVoltage = 3.2
+        self.maxChargeCurrent = self.capacity * 0.25
+	self.maxDischargeCurrent = self.capacity * 0.5
 	self.partnr = 0 
 	self.firmwareVersion = 'unknown'
 	self.numberOfModules = 0
@@ -64,20 +67,28 @@ class UbmsBattery(can.Listener):
 		self.currentAndPcbTAlarms = msg.data[4]
 		self.numberOfModules = msg.data[5]
 		self.numberOfModulesBalancing = msg.data[6]
-#		logging.info("SOC: %d Mode: %X",self.soc, self.mode&0x1F)
+		logging.debug("SOC: %d Mode: %X",self.soc, self.mode&0x1F)
 
 	elif msg.arbitration_id == 0xc1:
                 self.voltage = msg.data[0] * 1 #TODO make voltage scale factor input parameter
                 self.current = struct.unpack('b',chr(msg.data[1]))[0]
-		self.maxDischargeCurrent =  struct.unpack('<h', chr(msg.data[3])+chr(msg.data[4]))[0]
-		self.maxChargeCurrent =  struct.unpack('<h', chr(msg.data[5])+chr(msg.data[7]))[0]
-#		logging.info("Icmax %dA Idmax %dA", self.maxChargeCurrent, self.maxDischargeCurrent)
-#		logging.debug("I: %dA U: %dV",self.current, self.voltage)
 
-#	elif msg.arbitration_id == 0xc2: #works only in charge mode
-#                self.maxChargeCurrent = msg.data[0]
-#                self.maxChargeVoltage = msg.data[1]
-#		logging.info("CCL: %d CV: %d",self.maxChargeCurrent, self.maxChargeVoltage)
+		if self.mode & 0x2 == 2: #provided in drive mode only
+			self.maxDischargeCurrent =  struct.unpack('<h', chr(msg.data[3])+chr(msg.data[4]))[0]
+			self.maxChargeCurrent =  struct.unpack('<h', chr(msg.data[5])+chr(msg.data[7]))[0]
+			logging.debug("Icmax %dA Idmax %dA", self.maxChargeCurrent, self.maxDischargeCurrent)
+
+		logging.debug("I: %dA U: %dV",self.current, self.voltage)
+
+	elif msg.arbitration_id == 0xc2:
+		if self.mode & 0x1 == 1 and self.numberOfModulesBalancing > 0:#  and self.mode & 0x10 == 0x10 : 
+		#provided in charge mode, only apply when modules balance
+                	self.maxChargeCurrent = msg.data[0]
+                	self.maxChargeVoltage = struct.unpack('<h', chr(msg.data[1])+chr(msg.data[2]))[0]
+		else:
+		#allow charge with 0.5C
+			self.maxChargeCurrent = self.capacity * 0.5 
+		logging.debug("CCL: %d CV: %d",self.maxChargeCurrent, self.maxChargeVoltage)
 
 	elif msg.arbitration_id == 0xc4:
 		self.maxCellTemperature =  msg.data[0]-40
@@ -85,7 +96,7 @@ class UbmsBattery(can.Listener):
                 self.maxPcbTemperature =  msg.data[3]-40
 		self.maxCellVoltage =  struct.unpack('<h', chr(msg.data[4])+chr(msg.data[5]))[0]*0.001
 		self.minCellVoltage =  struct.unpack('<h', chr(msg.data[6])+chr(msg.data[7]))[0]*0.001
-#		logging.info("Umin %.3fV Umax %.3fV", self.minCellVoltage, self.maxCellVoltage)
+		logging.debug("Umin %.3fV Umax %.3fV", self.minCellVoltage, self.maxCellVoltage)
 
 #        elif msg.arbitration_id in [0x46a, 0x46b]:
 #                self.moduleCurrent = struct.unpack('>hhh', ''.join(chr(i) for i in msg.data[2:msg.dlc]))
@@ -154,16 +165,24 @@ class DbusBatteryService:
 
 
         self._ci = can.interface.Bus(channel=connection, bustype='socketcan', 
-					can_filters=[{"can_id": 0x0c0, "can_mask": 0xf2}])
+					can_filters=[{"can_id": 0x0cf, "can_mask": 0xff0}])
 	self._bat = UbmsBattery() 
 	notifier = can.Notifier(self._ci, [self._bat])
-        gobject.timeout_add(100, self._update)
+        gobject.timeout_add(50, self._update)
 
     def _update(self):
 #	self._dbusservice['/FirmwareVersion'] = self._bat.firmwareVersion
 #	self._dbusservice['/HardwareVersion'] = self._bat.partnr
 	
-	self._dbusservice['/Alarms/CellImbalance'] = (self._bat.internalErrors & 0x20)>>5 
+#	self._dbusservice['/Alarms/CellImbalance'] = (self._bat.internalErrors & 0x20)>>5
+	deltaCellVoltage = self._bat.maxCellVoltage - self._bat.minCellVoltage
+	if (deltaCellVoltage > 0.05):
+		self._dbusservice['/Alarms/CellImbalance'] = 1
+	elif (deltaCellVoltage > 0.1):
+		self._dbusservice['/Alarms/CellImbalance'] = 2
+	else:
+		self._dbusservice['/Alarms/CellImbalance'] = 0
+
 	self._dbusservice['/Alarms/LowVoltage'] =  (self._bat.voltageAndCellTAlarms & 0x10)>>3 
         self._dbusservice['/Alarms/HighVoltage'] =  (self._bat.voltageAndCellTAlarms & 0x20)>>4 
 	self._dbusservice['/Alarms/LowSoc'] = (self._bat.voltageAndCellTAlarms & 0x08)>>3 
@@ -175,9 +194,12 @@ class DbusBatteryService:
 
         self._dbusservice['/Soc'] = self._bat.soc 
 	if(self._bat.current >= 0):
-        	self._dbusservice['/TimeToGo'] = self._bat.soc*550*36
+	      	self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36
         else:
-		self._dbusservice['/TimeToGo'] = self._bat.soc*550*36/(-self._bat.current)
+		try:
+			self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36/(-self._bat.current)
+		except:
+		      	self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36
 
 	self._dbusservice['/Balancing'] = (self._bat.mode &0x10)>>4 
         self._dbusservice['/Dc/0/Current'] = self._bat.current 
