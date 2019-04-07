@@ -143,7 +143,7 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Dc/0/Temperature', 25)
         self._dbusservice.add_path('/Info/MaxChargeCurrent', 70)
         self._dbusservice.add_path('/Info/MaxDischargeCurrent', 150)
-	self._dbusservice.add_path('/Info/MaxChargeVoltage', voltage)
+	self._dbusservice.add_path('/Info/MaxChargeVoltage', int(voltage))
 	self._dbusservice.add_path('/Info/BatteryLowVoltage', 24.0)
  	self._dbusservice.add_path('/Alarms/CellImbalance', 0)
         self._dbusservice.add_path('/Alarms/LowVoltage', 0)
@@ -271,8 +271,8 @@ def main():
         servicename='com.victronenergy.battery',
 	connection = args.interface, 	
         deviceinstance=0,
-	capacity = args.capacity,
-	voltage = args.voltage
+	capacity = int(args.capacity),
+	voltage = int(args.voltage)
         )
 
     logging.info('Connected to dbus, and switching over to gobject.MainLoop() (= event based)')
