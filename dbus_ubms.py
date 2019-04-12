@@ -71,7 +71,7 @@ class UbmsBattery(can.Listener):
                 self.voltage = msg.data[0] * 1 #TODO make voltage scale factor input parameter
                 self.current = struct.unpack('b',chr(msg.data[1]))[0]
 
-		if self.mode & 0x2 == 2: #provided in drive mode only
+		if (self.mode & 0x2) == 2: #provided in drive mode only
 			self.maxDischargeCurrent =  struct.unpack('<h', chr(msg.data[3])+chr(msg.data[4]))[0]
 			self.maxChargeCurrent =  struct.unpack('<h', chr(msg.data[5])+chr(msg.data[7]))[0]
 			logging.debug("Icmax %dA Idmax %dA", self.maxChargeCurrent, self.maxDischargeCurrent)
@@ -79,14 +79,17 @@ class UbmsBattery(can.Listener):
 		logging.debug("I: %dA U: %dV",self.current, self.voltage)
 
 	elif msg.arbitration_id == 0xc2:
-		if self.mode & 0x1 == 1 and self.numberOfModulesBalancing > 0:#  and self.mode & 0x10 == 0x10 : 
-		#provided in charge mode, only apply when modules balance
-                	self.maxChargeCurrent = msg.data[0]
-                	self.maxChargeVoltage = struct.unpack('<h', chr(msg.data[1])+chr(msg.data[2]))[0]
-		else:
-		#allow charge with 0.5C
-			self.maxChargeCurrent = self.capacity * 0.5 
-		logging.debug("CCL: %d CV: %d",self.maxChargeCurrent, self.maxChargeVoltage)
+		#charge mode, only apply when modules balance
+		if (self.mode & 0x1) == 1:
+			#only apply when modules balance
+ 			if self.numberOfModulesBalancing > 0:     #intermodule balancing   self.mode & 0x10 == 0x10 : 
+                		self.maxChargeCurrent = msg.data[0]
+                		self.maxChargeVoltage = struct.unpack('<h', chr(msg.data[1])+chr(msg.data[2]))[0]
+			else:
+			#allow charge with 0.5C
+				self.maxChargeCurrent = self.capacity * 0.5 
+			
+			logging.debug("CCL: %d CV: %d",self.maxChargeCurrent, self.maxChargeVoltage)
 
 	elif msg.arbitration_id == 0xc4:
 		self.maxCellTemperature =  msg.data[0]-40
@@ -174,9 +177,9 @@ class DbusBatteryService:
 	
 #	self._dbusservice['/Alarms/CellImbalance'] = (self._bat.internalErrors & 0x20)>>5
 	deltaCellVoltage = self._bat.maxCellVoltage - self._bat.minCellVoltage
-	if (deltaCellVoltage > 0.05):
+	if (deltaCellVoltage > 0.1):
 		self._dbusservice['/Alarms/CellImbalance'] = 1
-	elif (deltaCellVoltage > 0.1):
+	elif (deltaCellVoltage > 0.2):
 		self._dbusservice['/Alarms/CellImbalance'] = 2
 	else:
 		self._dbusservice['/Alarms/CellImbalance'] = 0
