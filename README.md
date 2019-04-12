@@ -4,9 +4,13 @@
  Use this code at your own risk.
 ## Installation
 ```
+with git:
+ opkg install git
  git clone https://github.com/gimx/dbus_ubms.git
  cd dbus_ubms/ext
  git clone https://github.com/victronenergy/velib_python.git
+
+or download the above projects as archives, copy and unzip to root home
 ```
 
 ## Preparation on Raspi
@@ -27,7 +31,7 @@
  nohup python dbus/dbus_ubms.py -i can0 &
 ```
 
-# Run as a service: 
+## Run as a service: 
 ```
  ln -s ./dbus_ubms/service /service/dbus-ubms.can0
  and add the following to /data/rc.local
