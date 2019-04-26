@@ -223,7 +223,7 @@ class DbusBatteryService:
 	self._dbusservice['/Info/MaxDischargeCurrent'] = self._bat.maxDischargeCurrent
 #	self._dbusservice['/Info/MaxChargeVoltage'] = self._bat.maxChargeVoltage
 	self._dbusservice['/System/NrOfBatteries'] =  self._bat.numberOfModules
-	self._dbusservice['/System/NrOfBatteries/Balancing'] = self._bat.numberOfModulesBalancing 
+	self._dbusservice['/System/NrOfBatteriesBalancing'] = self._bat.numberOfModulesBalancing 
         return True
 
 
