@@ -146,7 +146,7 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Dc/0/Temperature', 25)
         self._dbusservice.add_path('/Info/MaxChargeCurrent', 70)
         self._dbusservice.add_path('/Info/MaxDischargeCurrent', 150)
-	self._dbusservice.add_path('/Info/MaxChargeVoltage', int(voltage))
+	self._dbusservice.add_path('/Info/MaxChargeVoltage', float(voltage))
 	self._dbusservice.add_path('/Info/BatteryLowVoltage', 24.0)
  	self._dbusservice.add_path('/Alarms/CellImbalance', 0)
         self._dbusservice.add_path('/Alarms/LowVoltage', 0)
@@ -157,12 +157,18 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Alarms/LowTemperature', 0)
         self._dbusservice.add_path('/Alarms/HighTemperature', 0)
         self._dbusservice.add_path('/Balancing', 0)
-        self._dbusservice.add_path('/System/NrOfBatteries', 0)
+        self._dbusservice.add_path('/System/HasTemperature', 1)
+        self._dbusservice.add_path('/System/NrOfBatteries', 10)
+        self._dbusservice.add_path('/System/BatteriesParallel', 5)
+        self._dbusservice.add_path('/System/BatteriesSeries', 2)
+        self._dbusservice.add_path('/System/NrOfCellsPerBattery', 4)
         self._dbusservice.add_path('/System/MinCellVoltage', 3.0)
         self._dbusservice.add_path('/System/MaxCellVoltage', 4.2)
         self._dbusservice.add_path('/System/MinCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxPcbTemperature', 10.0)
+        self._dbusservice.add_path('/Io/AllowToCharge', 1)
+        self._dbusservice.add_path('/Io/AllowToDischarge', 1)
 
 
         self._ci = can.interface.Bus(channel=connection, bustype='socketcan', 
@@ -275,7 +281,7 @@ def main():
 	connection = args.interface, 	
         deviceinstance=0,
 	capacity = int(args.capacity),
-	voltage = int(args.voltage)
+	voltage = float(args.voltage)
         )
 
     logging.info('Connected to dbus, and switching over to gobject.MainLoop() (= event based)')
