@@ -80,6 +80,7 @@ class UbmsBattery(can.Listener):
 
 	elif msg.arbitration_id == 0xc2:
 		#charge mode, only apply when modules balance
+		self.chargeComplete = (msg.data[3] & 0x4) >> 2
 		if (self.mode & 0x1) == 1:
 			#only apply when modules balance
  			if self.numberOfModulesBalancing > 0:     #intermodule balancing   self.mode & 0x10 == 0x10 : 
