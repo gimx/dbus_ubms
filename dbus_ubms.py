@@ -159,6 +159,7 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Balancing', 0)
         self._dbusservice.add_path('/System/HasTemperature', 1)
         self._dbusservice.add_path('/System/NrOfBatteries', 10)
+        self._dbusservice.add_path('/System/NrOfBatteriesBalancing', 0)
         self._dbusservice.add_path('/System/BatteriesParallel', 5)
         self._dbusservice.add_path('/System/BatteriesSeries', 2)
         self._dbusservice.add_path('/System/NrOfCellsPerBattery', 4)
@@ -222,6 +223,7 @@ class DbusBatteryService:
 	self._dbusservice['/Info/MaxDischargeCurrent'] = self._bat.maxDischargeCurrent
 #	self._dbusservice['/Info/MaxChargeVoltage'] = self._bat.maxChargeVoltage
 	self._dbusservice['/System/NrOfBatteries'] =  self._bat.numberOfModules
+	self._dbusservice['/System/NrOfBatteries/Balancing'] = self._bat.numberOfModulesBalancing 
         return True
 
 
