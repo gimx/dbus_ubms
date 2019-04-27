@@ -27,8 +27,12 @@ VERSION = '0.5'
 
 class UbmsBattery(can.Listener):
     opModes = {
+	0:"Standby",
 	1:"Charge",
-	2:"Drive",	
+	2:"Drive"	
+	}
+
+    state = {
 	4:"Equalize",
 	8:"Float"
 	}
@@ -79,13 +83,14 @@ class UbmsBattery(can.Listener):
 		logging.debug("I: %dA U: %dV",self.current, self.voltage)
 
 	elif msg.arbitration_id == 0xc2:
-		#charge mode, only apply when modules balance
-		self.chargeComplete = (msg.data[3] & 0x4) >> 2
-		if (self.mode & 0x1) == 1:
-			#only apply when modules balance
- 			if self.numberOfModulesBalancing > 0:     #intermodule balancing   self.mode & 0x10 == 0x10 : 
+		#charge mode only 
+		if (self.mode & 0x1) != 0:
+			self.chargeComplete = (msg.data[3] & 0x4) >> 2
+               		self.maxChargeVoltage = struct.unpack('<h', chr(msg.data[1])+chr(msg.data[2]))[0]
+			
+			#only apply lower charge current when equalizing 
+ 			if (self.state & 8) != 0: 
                 		self.maxChargeCurrent = msg.data[0]
-                		self.maxChargeVoltage = struct.unpack('<h', chr(msg.data[1])+chr(msg.data[2]))[0]
 			else:
 			#allow charge with 0.5C
 				self.maxChargeCurrent = self.capacity * 0.5 
@@ -139,10 +144,12 @@ class DbusBatteryService:
         self._dbusservice.add_path('/HardwareVersion', 'unknown')
         self._dbusservice.add_path('/Connected', 1)
         # Create battery specific objects
+        self._dbusservice.add_path('/State', 'Standby')
+        self._dbusservice.add_path('/Mode', 2, writeable=True, onchangecallback=self._send_mode_request) #default to drive mode
         self._dbusservice.add_path('/Dc/0/Voltage', 0)
         self._dbusservice.add_path('/Dc/0/Power', 0)
         self._dbusservice.add_path('/Dc/0/Current', 0)
-        self._dbusservice.add_path('/Soc', 11)
+        self._dbusservice.add_path('/Soc', 20)
         self._dbusservice.add_path('/TimeToGo', 600)
         self._dbusservice.add_path('/Dc/0/Temperature', 25)
         self._dbusservice.add_path('/Info/MaxChargeCurrent', 70)
@@ -169,8 +176,6 @@ class DbusBatteryService:
         self._dbusservice.add_path('/System/MinCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxPcbTemperature', 10.0)
-        self._dbusservice.add_path('/Io/AllowToCharge', 1)
-        self._dbusservice.add_path('/Io/AllowToDischarge', 1)
 
 
         self._ci = can.interface.Bus(channel=connection, bustype='socketcan', 
@@ -178,6 +183,19 @@ class DbusBatteryService:
 	self._bat = UbmsBattery(capacity=capacity, voltage=voltage) 
 	notifier = can.Notifier(self._ci, [self._bat])
         gobject.timeout_add(50, self._update)
+
+    def _send_mode_request(self, path, value):
+
+    	msg = can.Message(arbitration_id=0x440,
+                      data=[0, 0, min(max(0,int(value)),255), 0],
+                      extended_id=False)
+
+    	try:
+        	self._ci.send(msg)
+        	logging.info("Mode request message sent on {}".format(self._ci.channel_info))
+    	except can.CanError:
+        	logging.error("Mode request message NOT sent")
+
 
     def _update(self):
 #	self._dbusservice['/FirmwareVersion'] = self._bat.firmwareVersion
@@ -210,6 +228,8 @@ class DbusBatteryService:
 		except:
 		      	self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36
 
+	self._dbusservice['/State'] = (self._bat.mode &0xC) 
+	self._dbusservice['/Mode'] = (self._bat.mode &0x3) 
 	self._dbusservice['/Balancing'] = (self._bat.mode &0x10)>>4 
         self._dbusservice['/Dc/0/Current'] = self._bat.current 
         self._dbusservice['/Dc/0/Voltage'] = self._bat.voltage 
@@ -228,23 +248,12 @@ class DbusBatteryService:
         return True
 
 
-    def _handlechangedvalue(self, path, value):
-	try:
-	   self._dbusservice[path] = value	
-	except :
-	   print "Unexpected error:", sys.exc_info()[0]	
-           return False # reject the change
-	
-        logging.info("someone else tried to update %s to %s" % (path, value))
-        return True # accept the change
-
-
 # === All code below is to simply run it from the commandline for debugging purposes ===
 
-# It will created a dbus service called com.victronenergy.battery
+# It will create a dbus service called com.victronenergy.battery
 # To try this on commandline, start this program in one terminal, and try these commands
 # from another terminal:
-# dbus -y com.victronenergy.battery /Dc/Soc GetValue
+# dbus -y com.victronenergy.battery /Soc GetValue
 
 def main():
     parser = ArgumentParser(description='dbus_ubms', add_help=True)
