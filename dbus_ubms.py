@@ -144,12 +144,13 @@ class DbusBatteryService:
         self._dbusservice.add_path('/HardwareVersion', 'unknown')
         self._dbusservice.add_path('/Connected', 1)
         # Create battery specific objects
-        self._dbusservice.add_path('/State', 'Standby')
+        self._dbusservice.add_path('/State', 0)
         self._dbusservice.add_path('/Mode', 2, writeable=True, onchangecallback=self._send_mode_request) #default to drive mode
         self._dbusservice.add_path('/Dc/0/Voltage', 0)
         self._dbusservice.add_path('/Dc/0/Power', 0)
         self._dbusservice.add_path('/Dc/0/Current', 0)
         self._dbusservice.add_path('/Soc', 20)
+        self._dbusservice.add_path('/Capacity', int(capacity))
         self._dbusservice.add_path('/TimeToGo', 600)
         self._dbusservice.add_path('/Dc/0/Temperature', 25)
         self._dbusservice.add_path('/Info/MaxChargeCurrent', 70)
@@ -192,7 +193,7 @@ class DbusBatteryService:
 
     	try:
         	self._ci.send(msg)
-        	logging.info("Mode request message sent on {}".format(self._ci.channel_info))
+        	logging.debug("Mode request message sent on {}".format(self._ci.channel_info))
     	except can.CanError:
         	logging.error("Mode request message NOT sent")
 
