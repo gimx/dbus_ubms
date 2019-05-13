@@ -60,6 +60,14 @@ class UbmsBattery(can.Listener):
 	self.numberOfModules = 0
 	self.numberOfModulesBalancing = 0
 
+	self.history = {
+		lastDischarge:0,
+		avgDischarge:0,
+		totalAhDrawn:0,
+		timeSinceLastFullCharge:0,
+		chargedEnergy:0
+	}
+
     def on_message_received(self, msg):
 	if msg.arbitration_id == 0xc0:
 		self.soc = msg.data[0]
