@@ -15,6 +15,7 @@ import logging
 import sys
 import os
 
+from datetime import datetime
 import can
 import struct
 from argparse import ArgumentParser
@@ -221,6 +222,15 @@ class DbusBatteryService:
         self._dbusservice['/Alarms/LowTemperature'] = (self._bat.mode & 0x60)>>5 
 
         self._dbusservice['/Soc'] = self._bat.soc 
+	if self._bat.soc == 100 and self._dbusservice['/Info/MaxChargeVoltage'] == self._bat.maxChargeVoltage:  #self._bat.mode&0xC == 8 
+		logging.info("Reducing CVL to float level, SOC: %d Mode: %X",self._bat.soc, self._bat.mode&0x1F)
+		self._dbusservice['/Info/MaxChargeVoltage']=27.0	
+	
+	now = datetime.now().time()
+	if now.hour==0 and now.minute == 0: #at midnight
+		logging.info("Increase CVL to absorbtion level, SOC: %d Mode: %X",self._bat.soc, self._bat.mode&0x1F)
+		self._dbusservice['/Info/MaxChargeVoltage']=self._bat.maxChargeVoltage
+ 
 	if(self._bat.current >= 0):
 	      	self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36
         else:
