@@ -15,6 +15,7 @@ import logging
 import sys
 import os
 
+from datetime import datetime
 import can
 import struct
 from argparse import ArgumentParser
@@ -23,7 +24,7 @@ from argparse import ArgumentParser
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), 'ext/velib_python'))
 from vedbus import VeDbusService
 
-VERSION = '0.5'
+VERSION = '0.6'
 
 class UbmsBattery(can.Listener):
     opModes = {
@@ -59,6 +60,7 @@ class UbmsBattery(can.Listener):
 	self.firmwareVersion = 'unknown'
 	self.numberOfModules = 0
 	self.numberOfModulesBalancing = 0
+	self.daylyResetDone = 0
 
 	self.history = {
 		lastDischarge:0,
@@ -97,13 +99,13 @@ class UbmsBattery(can.Listener):
                		self.maxChargeVoltage = struct.unpack('<h', chr(msg.data[1])+chr(msg.data[2]))[0]
 			
 			#only apply lower charge current when equalizing 
- 			if (self.state & 8) != 0: 
+ 			if (self.mode & 8) != 0: 
                 		self.maxChargeCurrent = msg.data[0]
 			else:
 			#allow charge with 0.5C
 				self.maxChargeCurrent = self.capacity * 0.5 
 			
-			logging.debug("CCL: %d CV: %d",self.maxChargeCurrent, self.maxChargeVoltage)
+			logging.debug("CCL: %d CCV: %d",self.maxChargeCurrent, self.maxChargeVoltage)
 
 	elif msg.arbitration_id == 0xc4:
 		self.maxCellTemperature =  msg.data[0]-40
@@ -196,7 +198,7 @@ class DbusBatteryService:
     def _send_mode_request(self, path, value):
 
     	msg = can.Message(arbitration_id=0x440,
-                      data=[0, 0, min(max(0,int(value)),255), 0],
+                      data=[0, min(max(0,int(value)),255), 0, 0],
                       extended_id=False)
 
     	try:
@@ -207,6 +209,12 @@ class DbusBatteryService:
 
 
     def _update(self):
+	msg = can.Message(arbitration_id=0x440,
+                      data=[0, 1, 0, 0],
+                      extended_id=False)
+
+        self._ci.send(msg)
+
 #	self._dbusservice['/FirmwareVersion'] = self._bat.firmwareVersion
 #	self._dbusservice['/HardwareVersion'] = self._bat.partnr
 	
@@ -229,6 +237,16 @@ class DbusBatteryService:
         self._dbusservice['/Alarms/LowTemperature'] = (self._bat.mode & 0x60)>>5 
 
         self._dbusservice['/Soc'] = self._bat.soc 
+	if self._bat.soc == 100 : #and self._dbusservice['/Info/MaxChargeVoltage'] == self._bat.maxChargeVoltage:  #self._bat.mode&0xC == 8 
+		logging.info("Reducing CVL to float level, SOC: %d Mode: %X",self._bat.soc, self._bat.mode&0x1F)
+		self._dbusservice['/Info/MaxChargeVoltage'] = 27.0	
+	
+	now = datetime.now().time()
+	if now.hour == 0 and now.minute == 0 and !self._bat.daylyResetDone: #at midnight
+		logging.info("Increase CVL to absorbtion level, SOC: %d Mode: %X",self._bat.soc, self._bat.mode&0x1F)
+		self._dbusservice['/Info/MaxChargeVoltage']=self._bat.maxChargeVoltage
+		self._bat.daylyResetDone = 1
+ 
 	if(self._bat.current >= 0):
 	      	self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36
         else:
