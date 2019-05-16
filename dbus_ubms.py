@@ -14,6 +14,7 @@ import argparse
 import logging
 import sys
 import os
+import dbus
 
 from datetime import datetime
 import can
@@ -23,6 +24,8 @@ from argparse import ArgumentParser
 # our own packages
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), 'ext/velib_python'))
 from vedbus import VeDbusService
+from ve_utils import exit_on_error
+from settingsdevice import SettingsDevice 
 
 VERSION = '0.6'
 
@@ -63,12 +66,24 @@ class UbmsBattery(can.Listener):
 	self.daylyResetDone = 0
 
 	self.history = {
-		lastDischarge:0,
-		avgDischarge:0,
-		totalAhDrawn:0,
-		timeSinceLastFullCharge:0,
-		chargedEnergy:0
+		"lastDischarge":0,
+		"avgDischarge":0,
+		"totalAhDrawn":0l,
+		"numSamples":0,
+		"timeSinceLastFullCharge":0,
+		"chargedEnergy":0
 	}
+
+    def _update_history():
+	if self.current < 0:
+		self.history.totalAhDrawn += self.current*2.778e-5
+		self.history.discharged += self.current*2.778e-5
+	else:
+		self.history.charged += self.current*2.778e-5	
+		
+    def on_exit():
+	with open("ubms_history.json", "w") as write_file:
+                json.dump(self.history, write_file)
 
     def on_message_received(self, msg):
 	if msg.arbitration_id == 0xc0:
@@ -99,7 +114,7 @@ class UbmsBattery(can.Listener):
                		self.maxChargeVoltage = struct.unpack('<h', chr(msg.data[1])+chr(msg.data[2]))[0]
 			
 			#only apply lower charge current when equalizing 
- 			if (self.mode & 8) != 0: 
+			if (self.mode & 0x18) == 0x18 : 
                 		self.maxChargeCurrent = msg.data[0]
 			else:
 			#allow charge with 0.5C
@@ -134,12 +149,20 @@ class UbmsBattery(can.Listener):
         return True
 
 
+def handle_changed_setting(setting, oldvalue, newvalue):
+    print 'setting changed, setting: %s, old: %s, new: %s' % (setting, oldvalue, newvalue)
+
+
 
 class DbusBatteryService:
-    def __init__(self, servicename, deviceinstance, voltage, capacity, productname='V*lence U-BMS', connection='can0'):
-        self._dbusservice = VeDbusService(servicename)
+    def __init__(self, servicename, deviceinstance, voltage, capacity, productname='Valence U-BMS', connection='can0'):
 
-        logging.debug("%s /DeviceInstance = %d" % (servicename, deviceinstance))
+	self._ci = can.interface.Bus(channel=connection, bustype='socketcan',
+                                        can_filters=[{"can_id": 0x0cf, "can_mask": 0xff0}])
+
+        self._dbusservice = VeDbusService(servicename+'.socketcan_'+connection+'_di'+str(deviceinstance))
+
+        logging.debug("%s /DeviceInstance = %d" % (servicename+'.socketcan_'+connection+'_di'+str(deviceinstance), deviceinstance))
 
         # Create the management objects, as specified in the ccgx dbus-api document
         self._dbusservice.add_path('/Mgmt/ProcessName', __file__)
@@ -188,12 +211,23 @@ class DbusBatteryService:
         self._dbusservice.add_path('/System/MaxCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxPcbTemperature', 10.0)
 
+	self._settings = SettingsDevice(
+    		bus=dbus.SystemBus() if (platform.machine() == 'armv7l') else dbus.SessionBus(),
+    		supportedSettings={
+                	'AvgDischarge': ['/Settings/Ubms/AvgerageDischarge', 0,0,0], 
+                	'TotalAhDrawn': ['/Settings/Ubms/TotalAhDrawn', 0,0,0],
+			'interval': ['/Settings/Ubms/Interval', 50, 50, 200]
+        	},
+    		eventCallback=handle_changed_setting)
 
-        self._ci = can.interface.Bus(channel=connection, bustype='socketcan', 
-					can_filters=[{"can_id": 0x0cf, "can_mask": 0xff0}])
+	self._dbusservice.add_path('/History/AverageDischarge', 0)#self._settings['/Settings/Ubms/AvgerageDischarge'])
+        self._dbusservice.add_path('/History/TotalAhDrawn', 0)#self._settings['/Settings/Ubms/TotalAhDrawn'])
+        self._dbusservice.add_path('/History/DischargedEnergy', 0)
+        self._dbusservice.add_path('/History/ChargedEnergy', 0)
+
 	self._bat = UbmsBattery(capacity=capacity, voltage=voltage) 
 	notifier = can.Notifier(self._ci, [self._bat])
-        gobject.timeout_add(50, self._update)
+        gobject.timeout_add(50, exit_on_error, self._update)
 
     def _send_mode_request(self, path, value):
 
@@ -207,13 +241,16 @@ class DbusBatteryService:
     	except can.CanError:
         	logging.error("Mode request message NOT sent")
 
+    def _on_exit(self):
+	self._settings['/Settings/Ubms/AvgerageDischarge'] = self._dbusservice['/History/AverageDischarge']
+	self._settings['/Settings/Ubms/TotalAhDrawn'] = self._dbusservice['/History/TotalAhDrawn']
 
     def _update(self):
-	msg = can.Message(arbitration_id=0x440,
-                      data=[0, 1, 0, 0],
-                      extended_id=False)
+#	msg = can.Message(arbitration_id=0x440,
+#                      data=[0, 1, 0, 0],
+#                      extended_id=False)
 
-        self._ci.send(msg)
+#        self._ci.send(msg)
 
 #	self._dbusservice['/FirmwareVersion'] = self._bat.firmwareVersion
 #	self._dbusservice['/HardwareVersion'] = self._bat.partnr
@@ -242,7 +279,7 @@ class DbusBatteryService:
 		self._dbusservice['/Info/MaxChargeVoltage'] = 27.0	
 	
 	now = datetime.now().time()
-	if now.hour == 0 and now.minute == 0 and !self._bat.daylyResetDone: #at midnight
+	if now.hour == 0 and now.minute == 0 and not self._bat.daylyResetDone: #at midnight
 		logging.info("Increase CVL to absorbtion level, SOC: %d Mode: %X",self._bat.soc, self._bat.mode&0x1F)
 		self._dbusservice['/Info/MaxChargeVoltage']=self._bat.maxChargeVoltage
 		self._bat.daylyResetDone = 1
