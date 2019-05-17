@@ -33,10 +33,9 @@ or download the above projects as archives, copy and unzip to root home
 
 ## Run as a service: 
 ```
+ opkg install custom-rc.d
  ln -s ./dbus_ubms/service /service/dbus-ubms.can0
- and add the following to /data/rc.local
- ip link set can0 up type can bitrate 250000
- svc -u /service/dbus_ubms.can0
+ cp ./dbus_ubms/rc.local /data/rc.local
 ```
 
 ## Credits
