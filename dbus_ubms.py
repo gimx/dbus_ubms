@@ -74,13 +74,6 @@ class UbmsBattery(can.Listener):
 		"chargedEnergy":0
 	}
 
-    def _update_history():
-	if self.current < 0:
-		self.history.totalAhDrawn += self.current*2.778e-5
-		self.history.discharged += self.current*2.778e-5
-	else:
-		self.history.charged += self.current*2.778e-5	
-		
     def on_exit():
 	with open("ubms_history.json", "w") as write_file:
                 json.dump(self.history, write_file)
@@ -214,16 +207,16 @@ class DbusBatteryService:
 	self._settings = SettingsDevice(
     		bus=dbus.SystemBus() if (platform.machine() == 'armv7l') else dbus.SessionBus(),
     		supportedSettings={
-                	'AvgDischarge': ['/Settings/Ubms/AvgerageDischarge', 0,0,0], 
-                	'TotalAhDrawn': ['/Settings/Ubms/TotalAhDrawn', 0,0,0],
+                	'AvgDischarge': ['/Settings/Ubms/AvgerageDischarge', 0.0,0,0], 
+                	'TotalAhDrawn': ['/Settings/Ubms/TotalAhDrawn', 0.0,0,0],
 			'interval': ['/Settings/Ubms/Interval', 50, 50, 200]
         	},
     		eventCallback=handle_changed_setting)
 
-	self._dbusservice.add_path('/History/AverageDischarge', 0)#self._settings['/Settings/Ubms/AvgerageDischarge'])
-        self._dbusservice.add_path('/History/TotalAhDrawn', 0)#self._settings['/Settings/Ubms/TotalAhDrawn'])
-        self._dbusservice.add_path('/History/DischargedEnergy', 0)
-        self._dbusservice.add_path('/History/ChargedEnergy', 0)
+	self._dbusservice.add_path('/History/AverageDischarge', 0.0)#self._settings['/Settings/Ubms/AvgerageDischarge'])
+        self._dbusservice.add_path('/History/TotalAhDrawn', 0.0)#self._settings['/Settings/Ubms/TotalAhDrawn'])
+        self._dbusservice.add_path('/History/DischargedEnergy', 0.0)
+        self._dbusservice.add_path('/History/ChargedEnergy', 0.0)
 
 	self._bat = UbmsBattery(capacity=capacity, voltage=voltage) 
 	notifier = can.Notifier(self._ci, [self._bat])
@@ -309,6 +302,12 @@ class DbusBatteryService:
 #	self._dbusservice['/Info/MaxChargeVoltage'] = self._bat.maxChargeVoltage
 	self._dbusservice['/System/NrOfBatteries'] =  self._bat.numberOfModules
 	self._dbusservice['/System/NrOfBatteriesBalancing'] = self._bat.numberOfModulesBalancing 
+	if self._bat.current < 0:
+        	self._dbusservice['/History/TotalAhDrawn'] += self._bat.current*2.778e-5
+        	self._dbusservice['/History/DischargedEnergy'] += self._bat.current * 2.778e-5 * self._bat.voltage
+        else:
+                self._dbusservice['/History/ChargedEnergy'] += self._bat.current * 2.778e-5 * self._bat.voltage
+
         return True
 
 
