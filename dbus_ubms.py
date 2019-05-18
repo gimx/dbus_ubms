@@ -15,6 +15,7 @@ import logging
 import sys
 import os
 import dbus
+import time
 
 from datetime import datetime
 import can
@@ -25,6 +26,7 @@ from argparse import ArgumentParser
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), 'ext/velib_python'))
 from vedbus import VeDbusService
 from ve_utils import exit_on_error
+from ve_utils import wrap_dbus_value
 from settingsdevice import SettingsDevice 
 
 VERSION = '0.6'
@@ -73,10 +75,6 @@ class UbmsBattery(can.Listener):
 		"timeSinceLastFullCharge":0,
 		"chargedEnergy":0
 	}
-
-    def on_exit():
-	with open("ubms_history.json", "w") as write_file:
-                json.dump(self.history, write_file)
 
     def on_message_received(self, msg):
 	if msg.arbitration_id == 0xc0:
@@ -143,15 +141,16 @@ class UbmsBattery(can.Listener):
 
 
 def handle_changed_setting(setting, oldvalue, newvalue):
-    print 'setting changed, setting: %s, old: %s, new: %s' % (setting, oldvalue, newvalue)
-
+    logging.debug('setting changed, setting: %s, old: %s, new: %s' % (setting, oldvalue, newvalue))
 
 
 class DbusBatteryService:
     def __init__(self, servicename, deviceinstance, voltage, capacity, productname='Valence U-BMS', connection='can0'):
-
+	self.minUpdateDone = 0
 	self._ci = can.interface.Bus(channel=connection, bustype='socketcan',
                                         can_filters=[{"can_id": 0x0cf, "can_mask": 0xff0}])
+
+#       self.cyclicModeTask = self._ci.send_periodic(msg, 10) #UBMS in slave mode times out after 20s
 
         self._dbusservice = VeDbusService(servicename+'.socketcan_'+connection+'_di'+str(deviceinstance))
 
@@ -170,14 +169,15 @@ class DbusBatteryService:
         self._dbusservice.add_path('/HardwareVersion', 'unknown')
         self._dbusservice.add_path('/Connected', 1)
         # Create battery specific objects
-        self._dbusservice.add_path('/State', 0)
-        self._dbusservice.add_path('/Mode', 2, writeable=True, onchangecallback=self._send_mode_request) #default to drive mode
+        self._dbusservice.add_path('/Status', 0)
+        self._dbusservice.add_path('/Mode', 1) 
         self._dbusservice.add_path('/Dc/0/Voltage', 0)
         self._dbusservice.add_path('/Dc/0/Power', 0)
         self._dbusservice.add_path('/Dc/0/Current', 0)
         self._dbusservice.add_path('/Soc', 20)
         self._dbusservice.add_path('/Capacity', int(capacity))
         self._dbusservice.add_path('/TimeToGo', 600)
+        self._dbusservice.add_path('/ConsumedAmphours', 0)
         self._dbusservice.add_path('/Dc/0/Temperature', 25)
         self._dbusservice.add_path('/Info/MaxChargeCurrent', 70)
         self._dbusservice.add_path('/Info/MaxDischargeCurrent', 150)
@@ -217,37 +217,42 @@ class DbusBatteryService:
         self._dbusservice.add_path('/History/TotalAhDrawn', 0.0)#self._settings['/Settings/Ubms/TotalAhDrawn'])
         self._dbusservice.add_path('/History/DischargedEnergy', 0.0)
         self._dbusservice.add_path('/History/ChargedEnergy', 0.0)
+	self._dbusservice.add_path('/History/MinCellVoltage', 4.0)
+        self._dbusservice.add_path('/History/MaxCellVoltage', 3.0)
 
 	self._bat = UbmsBattery(capacity=capacity, voltage=voltage) 
 	notifier = can.Notifier(self._ci, [self._bat])
+	time.sleep(2)
         gobject.timeout_add(50, exit_on_error, self._update)
 
-    def _send_mode_request(self, path, value):
+
+    def _transmit_mode(self, path, value):
 
     	msg = can.Message(arbitration_id=0x440,
                       data=[0, min(max(0,int(value)),255), 0, 0],
                       extended_id=False)
+	if not isinstance(task, can.ModifiableCyclicTaskABC):
+        	logging.error("This interface doesn't seem to support modification of cyclic message")
+        	self.cyclicModeTask.stop()
+        return
+	self.cyclicModeTask.modify_data(msg)
 
-    	try:
-        	self._ci.send(msg)
-        	logging.debug("Mode request message sent on {}".format(self._ci.channel_info))
-    	except can.CanError:
-        	logging.error("Mode request message NOT sent")
 
-    def _on_exit(self):
+
+    def __del__(self):
+	logging.debug('Saving history to localsettings')
 	self._settings['/Settings/Ubms/AvgerageDischarge'] = self._dbusservice['/History/AverageDischarge']
 	self._settings['/Settings/Ubms/TotalAhDrawn'] = self._dbusservice['/History/TotalAhDrawn']
+	self._ci.close()
+	logging.info('Stopping dbus_ubms')
 
     def _update(self):
 #	msg = can.Message(arbitration_id=0x440,
 #                      data=[0, 1, 0, 0],
 #                      extended_id=False)
 
-#        self._ci.send(msg)
+#       send_periodic(msg, 10, duration=None) #UBMS in slave mode times out after 20s
 
-#	self._dbusservice['/FirmwareVersion'] = self._bat.firmwareVersion
-#	self._dbusservice['/HardwareVersion'] = self._bat.partnr
-	
 #	self._dbusservice['/Alarms/CellImbalance'] = (self._bat.internalErrors & 0x20)>>5
 	deltaCellVoltage = self._bat.maxCellVoltage - self._bat.minCellVoltage
 	if (deltaCellVoltage > 0.1):
@@ -267,46 +272,57 @@ class DbusBatteryService:
         self._dbusservice['/Alarms/LowTemperature'] = (self._bat.mode & 0x60)>>5 
 
         self._dbusservice['/Soc'] = self._bat.soc 
-	if self._bat.soc == 100 : #and self._dbusservice['/Info/MaxChargeVoltage'] == self._bat.maxChargeVoltage:  #self._bat.mode&0xC == 8 
-		logging.info("Reducing CVL to float level, SOC: %d Mode: %X",self._bat.soc, self._bat.mode&0x1F)
-		self._dbusservice['/Info/MaxChargeVoltage'] = 27.0	
+#	if self._bat.soc == 100 : #and self._dbusservice['/Info/MaxChargeVoltage'] == self._bat.maxChargeVoltage:  #self._bat.mode&0xC == 8 
+#		logging.info("Reducing CVL to float level, SOC: %d Mode: %X",self._bat.soc, self._bat.mode&0x1F)
+#		self._dbusservice['/Info/MaxChargeVoltage'] = 27.0	
+
+        self._dbusservice['/Status'] = (self._bat.mode &0xC)
+        self._dbusservice['/Mode'] = (self._bat.mode &0x3)
+        self._dbusservice['/Balancing'] = (self._bat.mode &0x10)>>4
+        self._dbusservice['/Dc/0/Current'] = wrap_dbus_value(self._bat.current)
+        self._dbusservice['/Dc/0/Voltage'] = wrap_dbus_value(self._bat.voltage)
+        power = self._bat.voltage * self._bat.current
+        self._dbusservice['/Dc/0/Power'] = power 
+        self._dbusservice['/Dc/0/Temperature'] = self._bat.maxCellTemperature
+        self._dbusservice['/System/MaxCellVoltage'] = self._bat.maxCellVoltage
+	if (self._bat.maxCellVoltage > self._dbusservice['/History/MaxCellVoltage'] ):
+        	self._dbusservice['/History/MaxCellVoltage'] = self._bat.maxCellVoltage
+        self._dbusservice['/System/MinCellVoltage'] = self._bat.minCellVoltage
+	if (self._bat.minCellVoltage > self._dbusservice['/History/MinCellVoltage'] ):
+	        self._dbusservice['/History/MinCellVoltage'] = self._bat.minCellVoltage
+        self._dbusservice['/System/MinCellTemperature'] = self._bat.minCellTemperature
+        self._dbusservice['/System/MaxCellTemperature'] = self._bat.maxCellTemperature
+        self._dbusservice['/System/MaxPcbTemperature'] = self._bat.maxPcbTemperature
+        self._dbusservice['/Info/MaxChargeCurrent'] = self._bat.maxChargeCurrent
+        self._dbusservice['/Info/MaxDischargeCurrent'] = self._bat.maxDischargeCurrent
+#       self._dbusservice['/Info/MaxChargeVoltage'] = self._bat.maxChargeVoltage
+        self._dbusservice['/System/NrOfBatteries'] =  self._bat.numberOfModules
+        self._dbusservice['/System/NrOfBatteriesBalancing'] = self._bat.numberOfModulesBalancing
 	
 	now = datetime.now().time()
 	if now.hour == 0 and now.minute == 0 and not self._bat.daylyResetDone: #at midnight
 		logging.info("Increase CVL to absorbtion level, SOC: %d Mode: %X",self._bat.soc, self._bat.mode&0x1F)
-		self._dbusservice['/Info/MaxChargeVoltage']=self._bat.maxChargeVoltage
+		self._dbusservice['/Info/MaxChargeVoltage'] = self._bat.maxChargeVoltage
+		self._dbusservice['/History/ChargedEnergy'] = 0
+		self._dbusservice['/History/DischargedEnergy'] = 0		
+		self._dbusservice['/ConsumedAmphours'] = 0
 		self._bat.daylyResetDone = 1
- 
-	if(self._bat.current >= 0):
+
+	if now.minute != self.minUpdateDone: 
+	    self.minUpdateDone = now.minute	
+	    if self._bat.current >= 0:
+		#charging
 	      	self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36
-        else:
+                self._dbusservice['/History/ChargedEnergy'] += power  * 1.666667e-5 #kWh
+            else:
+		#discharging
+		self._dbusservice['/ConsumedAmphours'] += self._bat.current * 0.016667 #Ah
+		self._dbusservice['/History/TotalAhDrawn'] += self._bat.current * 0.016667 #Ah
+                self._dbusservice['/History/DischargedEnergy'] += power * 1.666667e-5 #kWh
 		try:
 			self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36/(-self._bat.current)
 		except:
 		      	self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36
-
-	self._dbusservice['/State'] = (self._bat.mode &0xC) 
-	self._dbusservice['/Mode'] = (self._bat.mode &0x3) 
-	self._dbusservice['/Balancing'] = (self._bat.mode &0x10)>>4 
-        self._dbusservice['/Dc/0/Current'] = self._bat.current 
-        self._dbusservice['/Dc/0/Voltage'] = self._bat.voltage 
-        self._dbusservice['/Dc/0/Power'] = self._bat.voltage * self._bat.current 
-        self._dbusservice['/Dc/0/Temperature'] = self._bat.maxCellTemperature 
-        self._dbusservice['/System/MaxCellVoltage'] = self._bat.maxCellVoltage
-	self._dbusservice['/System/MinCellVoltage'] = self._bat.minCellVoltage
-	self._dbusservice['/System/MinCellTemperature'] = self._bat.minCellTemperature
-	self._dbusservice['/System/MaxCellTemperature'] = self._bat.maxCellTemperature
-	self._dbusservice['/System/MaxPcbTemperature'] = self._bat.maxPcbTemperature
-	self._dbusservice['/Info/MaxChargeCurrent'] = self._bat.maxChargeCurrent
-	self._dbusservice['/Info/MaxDischargeCurrent'] = self._bat.maxDischargeCurrent
-#	self._dbusservice['/Info/MaxChargeVoltage'] = self._bat.maxChargeVoltage
-	self._dbusservice['/System/NrOfBatteries'] =  self._bat.numberOfModules
-	self._dbusservice['/System/NrOfBatteriesBalancing'] = self._bat.numberOfModulesBalancing 
-	if self._bat.current < 0:
-        	self._dbusservice['/History/TotalAhDrawn'] += self._bat.current*2.778e-5
-        	self._dbusservice['/History/DischargedEnergy'] += self._bat.current * 2.778e-5 * self._bat.voltage
-        else:
-                self._dbusservice['/History/ChargedEnergy'] += self._bat.current * 2.778e-5 * self._bat.voltage
 
         return True
 
