@@ -1,4 +1,4 @@
-#dbus_ubms
+##dbus_ubms
  CANBUS to dbus bridge for a Valence U-BMS to provide battery monitor service on Victronenergy Venus OS
 
  Use this code at your own risk.
@@ -37,6 +37,18 @@ or download the above projects as archives, copy and unzip to root home
  ln -s ./dbus_ubms/service /service/dbus-ubms.can0
  cp ./dbus_ubms/rc.local /data/rc.local
 ```
+
+## Configuration of U-BMS
+```
+ set SOC calculation to minimum (not average)
+ set voltage scaling factor to 1
+ configure C3 to single discharge/charge contactor, ie no separate charge path, no pre-charge, no on/off charge control
+ connect C3 (and route battery + through it)
+ connect battery voltage
+ connect CAN and CAN 5V supply
+ connect +12V for System and Ignition
+``` 
+   
 
 ## Credits
  - Majority of the protocol reverse engineering work was done by @cogito44 http://cogito44.free.fr
