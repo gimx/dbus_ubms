@@ -26,7 +26,6 @@ from argparse import ArgumentParser
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), 'ext/velib_python'))
 from vedbus import VeDbusService
 from ve_utils import exit_on_error
-from ve_utils import wrap_dbus_value
 from settingsdevice import SettingsDevice 
 
 VERSION = '0.6'
@@ -150,7 +149,11 @@ class DbusBatteryService:
 	self._ci = can.interface.Bus(channel=connection, bustype='socketcan',
                                         can_filters=[{"can_id": 0x0cf, "can_mask": 0xff0}])
 
-#       self.cyclicModeTask = self._ci.send_periodic(msg, 10) #UBMS in slave mode times out after 20s
+        # create mode command message simulating a VMU
+        msg = can.Message(arbitration_id=0x440,
+                      data=[0, 1, 0, 0], #default: charge mode
+                      extended_id=False)
+       	self.cyclicModeTask = self._ci.send_periodic(msg, 10) #UBMS in slave mode times out after 20s
 
         self._dbusservice = VeDbusService(servicename+'.socketcan_'+connection+'_di'+str(deviceinstance))
 
@@ -171,9 +174,9 @@ class DbusBatteryService:
         # Create battery specific objects
         self._dbusservice.add_path('/Status', 0)
         self._dbusservice.add_path('/Mode', 1) 
-        self._dbusservice.add_path('/Dc/0/Voltage', 0)
-        self._dbusservice.add_path('/Dc/0/Power', 0)
-        self._dbusservice.add_path('/Dc/0/Current', 0)
+        self._dbusservice.add_path('/Dc/0/Voltage', 0.0)
+        self._dbusservice.add_path('/Dc/0/Power', 0.0)
+        self._dbusservice.add_path('/Dc/0/Current', 0.0)
         self._dbusservice.add_path('/Soc', 20)
         self._dbusservice.add_path('/Capacity', int(capacity))
         self._dbusservice.add_path('/TimeToGo', 600)
@@ -209,21 +212,24 @@ class DbusBatteryService:
     		supportedSettings={
                 	'AvgDischarge': ['/Settings/Ubms/AvgerageDischarge', 0.0,0,0], 
                 	'TotalAhDrawn': ['/Settings/Ubms/TotalAhDrawn', 0.0,0,0],
+                	'MinCellVoltage': ['/Settings/Ubms/MinCellVoltage', 0.0,0,0],
+                	'MaxCellVoltage': ['/Settings/Ubms/MaxCellVoltage', 0.0,0,0],
 			'interval': ['/Settings/Ubms/Interval', 50, 50, 200]
         	},
     		eventCallback=handle_changed_setting)
 
-	self._dbusservice.add_path('/History/AverageDischarge', 0.0)#self._settings['/Settings/Ubms/AvgerageDischarge'])
-        self._dbusservice.add_path('/History/TotalAhDrawn', 0.0)#self._settings['/Settings/Ubms/TotalAhDrawn'])
+	self._dbusservice.add_path('/History/AverageDischarge', self._settings['AvgDischarge'])
+        self._dbusservice.add_path('/History/TotalAhDrawn', self._settings['TotalAhDrawn'])
         self._dbusservice.add_path('/History/DischargedEnergy', 0.0)
         self._dbusservice.add_path('/History/ChargedEnergy', 0.0)
-	self._dbusservice.add_path('/History/MinCellVoltage', 4.0)
-        self._dbusservice.add_path('/History/MaxCellVoltage', 3.0)
+	self._dbusservice.add_path('/History/MinCellVoltage', self._settings['MinCellVoltage'])
+        self._dbusservice.add_path('/History/MaxCellVoltage', self._settings['MaxCellVoltage'])
 
 	self._bat = UbmsBattery(capacity=capacity, voltage=voltage) 
+
 	notifier = can.Notifier(self._ci, [self._bat])
-	time.sleep(2)
-        gobject.timeout_add(50, exit_on_error, self._update)
+
+        gobject.timeout_add( self._settings['interval'], exit_on_error, self._update)
 
 
     def _transmit_mode(self, path, value):
@@ -243,16 +249,12 @@ class DbusBatteryService:
 	logging.debug('Saving history to localsettings')
 	self._settings['/Settings/Ubms/AvgerageDischarge'] = self._dbusservice['/History/AverageDischarge']
 	self._settings['/Settings/Ubms/TotalAhDrawn'] = self._dbusservice['/History/TotalAhDrawn']
+	self._settings['/Settings/Ubms/MinCellVoltage'] = self._dbusservice['/History/MinCellVoltage']
+	self._settings['/Settings/Ubms/MaxCellVoltage'] = self._dbusservice['/History/MaxCellVoltage']
 	self._ci.close()
 	logging.info('Stopping dbus_ubms')
 
     def _update(self):
-#	msg = can.Message(arbitration_id=0x440,
-#                      data=[0, 1, 0, 0],
-#                      extended_id=False)
-
-#       send_periodic(msg, 10, duration=None) #UBMS in slave mode times out after 20s
-
 #	self._dbusservice['/Alarms/CellImbalance'] = (self._bat.internalErrors & 0x20)>>5
 	deltaCellVoltage = self._bat.maxCellVoltage - self._bat.minCellVoltage
 	if (deltaCellVoltage > 0.1):
@@ -279,10 +281,10 @@ class DbusBatteryService:
         self._dbusservice['/Status'] = (self._bat.mode &0xC)
         self._dbusservice['/Mode'] = (self._bat.mode &0x3)
         self._dbusservice['/Balancing'] = (self._bat.mode &0x10)>>4
-        self._dbusservice['/Dc/0/Current'] = wrap_dbus_value(self._bat.current)
-        self._dbusservice['/Dc/0/Voltage'] = wrap_dbus_value(self._bat.voltage)
+        self._dbusservice['/Dc/0/Current'] = float(self._bat.current)
+        self._dbusservice['/Dc/0/Voltage'] = float(self._bat.voltage)
         power = self._bat.voltage * self._bat.current
-        self._dbusservice['/Dc/0/Power'] = power 
+        self._dbusservice['/Dc/0/Power'] = float(power) 
         self._dbusservice['/Dc/0/Temperature'] = self._bat.maxCellTemperature
         self._dbusservice['/System/MaxCellVoltage'] = self._bat.maxCellVoltage
 	if (self._bat.maxCellVoltage > self._dbusservice['/History/MaxCellVoltage'] ):
