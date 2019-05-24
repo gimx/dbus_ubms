@@ -64,7 +64,6 @@ class UbmsBattery(can.Listener):
 	self.firmwareVersion = 'unknown'
 	self.numberOfModules = 0
 	self.numberOfModulesBalancing = 0
-	self.daylyResetDone = 0
 
 	self.history = {
 		"lastDischarge":0,
@@ -146,6 +145,7 @@ def handle_changed_setting(setting, oldvalue, newvalue):
 class DbusBatteryService:
     def __init__(self, servicename, deviceinstance, voltage, capacity, productname='Valence U-BMS', connection='can0'):
 	self.minUpdateDone = 0
+	self.daylyResetDone = 0
 	self._ci = can.interface.Bus(channel=connection, bustype='socketcan',
                                         can_filters=[{"can_id": 0x0cf, "can_mask": 0xff0}])
 
@@ -244,15 +244,29 @@ class DbusBatteryService:
 	self.cyclicModeTask.modify_data(msg)
 
 
-
     def __del__(self):
-	logging.debug('Saving history to localsettings')
-	self._settings['/Settings/Ubms/AvgerageDischarge'] = self._dbusservice['/History/AverageDischarge']
-	self._settings['/Settings/Ubms/TotalAhDrawn'] = self._dbusservice['/History/TotalAhDrawn']
-	self._settings['/Settings/Ubms/MinCellVoltage'] = self._dbusservice['/History/MinCellVoltage']
-	self._settings['/Settings/Ubms/MaxCellVoltage'] = self._dbusservice['/History/MaxCellVoltage']
+	self._safe_history()
 	self._ci.close()
 	logging.info('Stopping dbus_ubms')
+
+
+    def _safe_history(self):
+	logging.debug('Saving history to localsettings')
+	self._settings['AvgDischarge'] = self._dbusservice['/History/AverageDischarge']
+	self._settings['TotalAhDrawn'] = self._dbusservice['/History/TotalAhDrawn']
+#	self._settings['MinCellVoltage'] = self._dbusservice['/History/MinCellVoltage']
+#	self._settings['MaxCellVoltage'] = self._dbusservice['/History/MaxCellVoltage']
+
+
+    def _daily_stats(self):
+        if datetime.now().day != self.daylyResetDone: #if not already done
+                logging.info("Updating stats, SOC: %d Mode: %X",self._bat.soc, self._bat.mode&0x1F)
+                self._dbusservice['/History/AverageDischarge'] = (6*self._dbusservice['/History/AverageDischarge'] + self._dbusservice['/History/DischargedEnergy'])/7 #rolling week
+                self._dbusservice['/History/ChargedEnergy'] = 0
+                self._dbusservice['/History/DischargedEnergy'] = 0
+                self._dbusservice['/ConsumedAmphours'] = 0
+                self.daylyResetDone = datetime.now().day 
+
 
     def _update(self):
 #	self._dbusservice['/Alarms/CellImbalance'] = (self._bat.internalErrors & 0x20)>>5
@@ -274,17 +288,18 @@ class DbusBatteryService:
         self._dbusservice['/Alarms/LowTemperature'] = (self._bat.mode & 0x60)>>5 
 
         self._dbusservice['/Soc'] = self._bat.soc 
-#	if self._bat.soc == 100 : #and self._dbusservice['/Info/MaxChargeVoltage'] == self._bat.maxChargeVoltage:  #self._bat.mode&0xC == 8 
+	if self._bat.soc == 100 : #and self._dbusservice['/Info/MaxChargeVoltage'] == self._bat.maxChargeVoltage:  #self._bat.mode&0xC == 8 
+		self._dayly_stats() #trigger on first occurence of full 
 #		logging.info("Reducing CVL to float level, SOC: %d Mode: %X",self._bat.soc, self._bat.mode&0x1F)
 #		self._dbusservice['/Info/MaxChargeVoltage'] = 27.0	
 
         self._dbusservice['/Status'] = (self._bat.mode &0xC)
         self._dbusservice['/Mode'] = (self._bat.mode &0x3)
         self._dbusservice['/Balancing'] = (self._bat.mode &0x10)>>4
-        self._dbusservice['/Dc/0/Current'] = float(self._bat.current)
-        self._dbusservice['/Dc/0/Voltage'] = float(self._bat.voltage)
+        self._dbusservice['/Dc/0/Current'] = self._bat.current
+        self._dbusservice['/Dc/0/Voltage'] = self._bat.voltage
         power = self._bat.voltage * self._bat.current
-        self._dbusservice['/Dc/0/Power'] = float(power) 
+        self._dbusservice['/Dc/0/Power'] = power 
         self._dbusservice['/Dc/0/Temperature'] = self._bat.maxCellTemperature
         self._dbusservice['/System/MaxCellVoltage'] = self._bat.maxCellVoltage
 	if (self._bat.maxCellVoltage > self._dbusservice['/History/MaxCellVoltage'] ):
@@ -302,13 +317,8 @@ class DbusBatteryService:
         self._dbusservice['/System/NrOfBatteriesBalancing'] = self._bat.numberOfModulesBalancing
 	
 	now = datetime.now().time()
-	if now.hour == 0 and now.minute == 0 and not self._bat.daylyResetDone: #at midnight
-		logging.info("Increase CVL to absorbtion level, SOC: %d Mode: %X",self._bat.soc, self._bat.mode&0x1F)
-		self._dbusservice['/Info/MaxChargeVoltage'] = self._bat.maxChargeVoltage
-		self._dbusservice['/History/ChargedEnergy'] = 0
-		self._dbusservice['/History/DischargedEnergy'] = 0		
-		self._dbusservice['/ConsumedAmphours'] = 0
-		self._bat.daylyResetDone = 1
+	if now.hour == 0 and now.minute == 0:#check at midnight 
+		self._daily_stats()
 
 	if now.minute != self.minUpdateDone: 
 	    self.minUpdateDone = now.minute	
@@ -325,6 +335,8 @@ class DbusBatteryService:
 			self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36/(-self._bat.current)
 		except:
 		      	self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36
+
+	    self._safe_history()
 
         return True
 
