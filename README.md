@@ -1,4 +1,4 @@
-##dbus_ubms
+## dbus_ubms
  CANBUS to dbus bridge for a Valence U-BMS to provide battery monitor service on Victronenergy Venus OS
 
  Use this code at your own risk.
@@ -33,7 +33,6 @@ or download the above projects as archives, copy and unzip to root home
 
 ## Run as a service: 
 ```
- opkg install custom-rc.d
  ln -s ./dbus_ubms/service /service/dbus-ubms.can0
  cp ./dbus_ubms/rc.local /data/rc.local
 ```
