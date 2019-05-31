@@ -123,9 +123,9 @@ class UbmsBattery(can.Listener):
 		module = (msg.arbitration_id - 0x351) >> 1
                 self.cellVoltages[module] = self.cellVoltages[module]+ tuple(struct.unpack('>h', msg.data[2:msg.dlc]))
 		self.moduleVoltage[module] = sum(self.cellVoltages[module]) 
-		logging.debug("Module %d: %f", module, self.moduleVoltage[module])
+		logging.debug("Umodule %d: %fmV", module, self.moduleVoltage[module])
 		if module == self.numberOfModules-1:
-			self.voltage = sum(self._bat.moduleVoltage[0:2])/1000.0 #adjust slice to number of modules in series
+			self.voltage = sum(self.moduleVoltage[0:2])/1000.0 #adjust slice to number of modules in series
 
 #        elif msg.arbitration_id in [0x46a, 0x46b]:
 #                self.moduleCurrent = struct.unpack('>hhh', ''.join(chr(i) for i in msg.data[2:msg.dlc]))
@@ -221,8 +221,8 @@ class DbusBatteryService:
                 	'AvgDischarge': ['/Settings/Ubms/AvgerageDischarge', 0.0,0,0], 
                 	'TotalAhDrawn': ['/Settings/Ubms/TotalAhDrawn', 0.0,0,0],
                 	'TimeLastFull': ['/Settings/Ubms/TimeLastFull', 0l ,0,0],
-                	'MinCellVoltage': ['/Settings/Ubms/MinCellVoltage', 0.0,0,0],
-                	'MaxCellVoltage': ['/Settings/Ubms/MaxCellVoltage', 0.0,0,0],
+                	'MinCellVoltage': ['/Settings/Ubms/MinCellVoltage', 4.0,2.0,4.0],
+                	'MaxCellVoltage': ['/Settings/Ubms/MaxCellVoltage', 2.0,2.0,4.0],
 			'interval': ['/Settings/Ubms/Interval', 50, 50, 200]
         	},
     		eventCallback=handle_changed_setting)
@@ -262,8 +262,8 @@ class DbusBatteryService:
 	logging.debug('Saving history to localsettings')
 	self._settings['AvgDischarge'] = self._dbusservice['/History/AverageDischarge']
 	self._settings['TotalAhDrawn'] = self._dbusservice['/History/TotalAhDrawn']
-#	self._settings['MinCellVoltage'] = self._dbusservice['/History/MinCellVoltage']
-#	self._settings['MaxCellVoltage'] = self._dbusservice['/History/MaxCellVoltage']
+	self._settings['MinCellVoltage'] = self._dbusservice['/History/MinCellVoltage']
+	self._settings['MaxCellVoltage'] = self._dbusservice['/History/MaxCellVoltage']
 
 
     def _daily_stats(self):
@@ -296,7 +296,7 @@ class DbusBatteryService:
         self._dbusservice['/Alarms/LowTemperature'] = (self._bat.mode & 0x60)>>5 
 
         self._dbusservice['/Soc'] = self._bat.soc 
-	if self._bat.soc == 100 : #and self._dbusservice['/Info/MaxChargeVoltage'] == self._bat.maxChargeVoltage:  #self._bat.mode&0xC == 8 
+	if self._bat.soc == 100 or self._bat.chargeComplete :  
 		self._settings['TimeLastFull']  = time() 
 		self._daily_stats() #trigger on first occurence of full 
 #		logging.info("Reducing CVL to float level, SOC: %d Mode: %X",self._bat.soc, self._bat.mode&0x1F)
@@ -313,15 +313,17 @@ class DbusBatteryService:
         self._dbusservice['/System/MaxCellVoltage'] = self._bat.maxCellVoltage
 	if (self._bat.maxCellVoltage > self._dbusservice['/History/MaxCellVoltage'] ):
         	self._dbusservice['/History/MaxCellVoltage'] = self._bat.maxCellVoltage
+		logging.info("New maximum cell voltage: %f", self._bat.maxCellVoltage)
         self._dbusservice['/System/MinCellVoltage'] = self._bat.minCellVoltage
-	if (self._bat.minCellVoltage > self._dbusservice['/History/MinCellVoltage'] ):
+	if (self._bat.minCellVoltage < self._dbusservice['/History/MinCellVoltage'] ):
 	        self._dbusservice['/History/MinCellVoltage'] = self._bat.minCellVoltage
+		logging.info("New minimum cell voltage: %f", self._bat.minCellVoltage)
         self._dbusservice['/System/MinCellTemperature'] = self._bat.minCellTemperature
         self._dbusservice['/System/MaxCellTemperature'] = self._bat.maxCellTemperature
         self._dbusservice['/System/MaxPcbTemperature'] = self._bat.maxPcbTemperature
         self._dbusservice['/Info/MaxChargeCurrent'] = self._bat.maxChargeCurrent
         self._dbusservice['/Info/MaxDischargeCurrent'] = self._bat.maxDischargeCurrent
-#       self._dbusservice['/Info/MaxChargeVoltage'] = self._bat.maxChargeVoltage
+        self._dbusservice['/Info/MaxChargeVoltage'] = self._bat.maxChargeVoltage
         self._dbusservice['/System/NrOfBatteries'] =  self._bat.numberOfModules
         self._dbusservice['/System/NrOfBatteriesBalancing'] = self._bat.numberOfModulesBalancing
 	
