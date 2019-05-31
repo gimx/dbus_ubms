@@ -1,4 +1,4 @@
-!/usr/bin/env python
+#!/usr/bin/env python
 
 """
 derived from dbusexample.py part of velib-python
@@ -124,7 +124,8 @@ class UbmsBattery(can.Listener):
                 self.cellVoltages[module] = self.cellVoltages[module]+ tuple(struct.unpack('>h', msg.data[2:msg.dlc]))
 		self.moduleVoltage[module] = sum(self.cellVoltages[module]) 
 		logging.debug("Module %d: %f", module, self.moduleVoltage[module])
-
+		if module == self.numberOfModules-1:
+			self.voltage = sum(self._bat.moduleVoltage[0:2])/1000.0 #adjust slice to number of modules in series
 
 #        elif msg.arbitration_id in [0x46a, 0x46b]:
 #                self.moduleCurrent = struct.unpack('>hhh', ''.join(chr(i) for i in msg.data[2:msg.dlc]))
@@ -305,7 +306,7 @@ class DbusBatteryService:
         self._dbusservice['/Mode'] = (self._bat.mode &0x3)
         self._dbusservice['/Balancing'] = (self._bat.mode &0x10)>>4
         self._dbusservice['/Dc/0/Current'] = self._bat.current
-        self._dbusservice['/Dc/0/Voltage'] = sum(self._bat.moduleVoltage[0:2])/1000.0 #self._bat.voltage
+        self._dbusservice['/Dc/0/Voltage'] = self._bat.voltage
         power = self._bat.voltage * self._bat.current
         self._dbusservice['/Dc/0/Power'] = power 
         self._dbusservice['/Dc/0/Temperature'] = self._bat.maxCellTemperature
