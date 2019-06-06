@@ -1,3 +1,4 @@
 #!/bin/sh
+ip link set can0 up type can bitrate 250000
 exec 2>&1
-exec softlimit -d 100000000 -s 1000000 -a 100000000 python ../dbus_ubms.py -i can0 -v 29 -c 650
+exec softlimit -d 100000000 -s 1000000 -a 100000000 python ../dbus_ubms.py -i can0 -v 29.2 -c 650
