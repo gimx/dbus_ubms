@@ -96,7 +96,7 @@ class UbmsBattery(can.Listener):
 		#charge mode only 
 		if (self.mode & 0x1) != 0:
 			self.chargeComplete = (msg.data[3] & 0x4) >> 2
-               		self.maxChargeVoltage = struct.unpack('<h', msg.data[1:3])[0]
+#               		self.maxChargeVoltage = struct.unpack('<h', msg.data[1:3])[0]
 			
 			#only apply lower charge current when equalizing 
 			if (self.mode & 0x18) == 0x18 : 
@@ -105,7 +105,7 @@ class UbmsBattery(can.Listener):
 			#allow charge with 0.5C
 				self.maxChargeCurrent = self.capacity * 0.5 
 			
-			logging.debug("CCL: %d CCV: %d",self.maxChargeCurrent, self.maxChargeVoltage)
+			logging.debug("CCL: %d CVL: %d",self.maxChargeCurrent, self.maxChargeVoltage)
 
 	elif msg.arbitration_id == 0xc4:
 		self.maxCellTemperature =  msg.data[0]-40
@@ -270,8 +270,6 @@ class DbusBatteryService:
         if datetime.now().day != self.daylyResetDone: #if not already done
                 logging.info("Updating stats, SOC: %d Mode: %X",self._bat.soc, self._bat.mode&0x1F)
                 self._dbusservice['/History/AverageDischarge'] = (6*self._dbusservice['/History/AverageDischarge'] + self._dbusservice['/History/DischargedEnergy'])/7 #rolling week
-                self._dbusservice['/History/ChargedEnergy'] = 0
-                self._dbusservice['/History/DischargedEnergy'] = 0
                 self._dbusservice['/ConsumedAmphours'] = 0
                 self.daylyResetDone = datetime.now().day 
 
@@ -297,10 +295,11 @@ class DbusBatteryService:
 
         self._dbusservice['/Soc'] = self._bat.soc 
 	if self._bat.soc == 100 or self._bat.chargeComplete :  
-		self._settings['TimeLastFull']  = time() 
-		self._daily_stats() #trigger on first occurence of full 
-#		logging.info("Reducing CVL to float level, SOC: %d Mode: %X",self._bat.soc, self._bat.mode&0x1F)
-#		self._dbusservice['/Info/MaxChargeVoltage'] = 27.0	
+		if datetime.fromtimestamp(time()).day != datetime.fromtimestamp(self._settings['TimeLastFull']).day: 
+			logging.info("Battery fully charged, SOC %d." ,self._bat.soc )
+			self._settings['TimeLastFull'] = time() 
+                	self._dbusservice['/History/ChargedEnergy'] = 0
+                	self._dbusservice['/History/DischargedEnergy'] = 0
 
         self._dbusservice['/Status'] = (self._bat.mode &0xC)
         self._dbusservice['/Mode'] = (self._bat.mode &0x3)
@@ -328,8 +327,8 @@ class DbusBatteryService:
         self._dbusservice['/System/NrOfBatteriesBalancing'] = self._bat.numberOfModulesBalancing
 	
 	now = datetime.now().time()
-	if now.hour == 0 and now.minute == 0:#check at midnight 
-		self._daily_stats()
+#	if now.hour == 0 and now.minute == 0:#check at midnight 
+#		self._daily_stats()
 
 	if now.minute != self.minUpdateDone: 
 	    self.minUpdateDone = now.minute	
