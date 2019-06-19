@@ -153,7 +153,7 @@ def handle_changed_setting(setting, oldvalue, newvalue):
 class DbusBatteryService:
     def __init__(self, servicename, deviceinstance, voltage, capacity, productname='Valence U-BMS', connection='can0'):
 	self.minUpdateDone = 0
-	self.daylyResetDone = 0
+	self.dailyResetDone = 0
 	self._ci = can.interface.Bus(channel=connection, bustype='socketcan',
                    can_filters=[{"can_id": 0x0cf, "can_mask": 0xff0}, {"can_id": 0x350, "can_mask": 0xff0}, {"can_id": 0x360, "can_mask": 0xff0}])
 
@@ -220,7 +220,7 @@ class DbusBatteryService:
     		supportedSettings={
                 	'AvgDischarge': ['/Settings/Ubms/AvgerageDischarge', 0.0,0,0], 
                 	'TotalAhDrawn': ['/Settings/Ubms/TotalAhDrawn', 0.0,0,0],
-                	'TimeLastFull': ['/Settings/Ubms/TimeLastFull', 0l ,0,0],
+                	'TimeLastFull': ['/Settings/Ubms/TimeLastFull', 0.0 ,0,0],
                 	'MinCellVoltage': ['/Settings/Ubms/MinCellVoltage', 4.0,2.0,4.0],
                 	'MaxCellVoltage': ['/Settings/Ubms/MaxCellVoltage', 2.0,2.0,4.0],
 			'interval': ['/Settings/Ubms/Interval', 50, 50, 200]
@@ -267,11 +267,10 @@ class DbusBatteryService:
 
 
     def _daily_stats(self):
-        if datetime.now().day != self.daylyResetDone: #if not already done
-                logging.info("Updating stats, SOC: %d Mode: %X",self._bat.soc, self._bat.mode&0x1F)
-                self._dbusservice['/History/AverageDischarge'] = (6*self._dbusservice['/History/AverageDischarge'] + self._dbusservice['/History/DischargedEnergy'])/7 #rolling week
-                self._dbusservice['/ConsumedAmphours'] = 0
-                self.daylyResetDone = datetime.now().day 
+        logging.info("Updating stats, SOC: %d, Discharged: %.2f, Charged: %.2f ",self._bat.soc,  self._dbusservice['/History/DischargedEnergy'],  self._dbusservice['/History/ChargedEnergy'])
+        self._dbusservice['/History/AverageDischarge'] = (6*self._dbusservice['/History/AverageDischarge'] + self._dbusservice['/History/DischargedEnergy'])/7 #rolling week
+        self._dbusservice['/ConsumedAmphours'] = 0
+        self.dailyResetDone = datetime.now().day 
 
 
     def _update(self):
@@ -295,7 +294,7 @@ class DbusBatteryService:
 
         self._dbusservice['/Soc'] = self._bat.soc 
 	if self._bat.soc == 100 or self._bat.chargeComplete :  
-		if datetime.fromtimestamp(time()).day != datetime.fromtimestamp(self._settings['TimeLastFull']).day: 
+		if datetime.fromtimestamp(time()).day != datetime.fromtimestamp(float(self._settings['TimeLastFull'])).day: 
 			logging.info("Battery fully charged, SOC %d." ,self._bat.soc )
 			self._settings['TimeLastFull'] = time() 
                 	self._dbusservice['/History/ChargedEnergy'] = 0
@@ -326,10 +325,10 @@ class DbusBatteryService:
         self._dbusservice['/System/NrOfBatteries'] =  self._bat.numberOfModules
         self._dbusservice['/System/NrOfBatteriesBalancing'] = self._bat.numberOfModulesBalancing
 	
-	now = datetime.now().time()
-#	if now.hour == 0 and now.minute == 0:#check at midnight 
-#		self._daily_stats()
+	if self._bat.current > 0  and datetime.now().day != self.dailyResetDone : #on first occurence of a positive bat current 
+		self._daily_stats()
 
+	now = datetime.now().time()
 	if now.minute != self.minUpdateDone: 
 	    self.minUpdateDone = now.minute	
 	    if self._bat.current >= 0:
