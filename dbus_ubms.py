@@ -331,15 +331,17 @@ class DbusBatteryService:
 	now = datetime.now().time()
 	if now.minute != self.minUpdateDone: 
 	    self.minUpdateDone = now.minute	
-	    if self._bat.current >= 0:
-		#charging
-	      	self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36
-                self._dbusservice['/History/ChargedEnergy'] += power  * 1.666667e-5 #kWh
+	    if self._bat.current > 0:
+		#charging 
+	      	#calculate time to full
+		self._dbusservice['/TimeToGo'] = (100 - self._bat.soc*self._bat.capacity) * 36 / self._bat.current 
+                self._dbusservice['/History/ChargedEnergy'] += power * 1.666667e-5 #kWh
             else:
 		#discharging
 		self._dbusservice['/ConsumedAmphours'] += self._bat.current * 0.016667 #Ah
 		self._dbusservice['/History/TotalAhDrawn'] += self._bat.current * 0.016667 #Ah
                 self._dbusservice['/History/DischargedEnergy'] += power * 1.666667e-5 #kWh
+		#calculate time to empty
 		try:
 			self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36/(-self._bat.current)
 		except:
