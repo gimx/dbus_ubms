@@ -41,6 +41,7 @@ or download the above projects as archives, copy and unzip to root home
 ```
  set SOC calculation to minimum (not average)
  set voltage scaling factor to 1
+ set VMU slave mode (error on timeout maybe on or off)
  configure C3 to single discharge/charge contactor, ie no separate charge path, no pre-charge, no on/off charge control
  connect C3 (and route battery + through it)
  connect battery voltage
