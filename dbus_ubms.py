@@ -233,6 +233,8 @@ class DbusBatteryService:
         self._dbusservice.add_path('/History/ChargedEnergy', 0.0)
 	self._dbusservice.add_path('/History/MinCellVoltage', self._settings['MinCellVoltage'])
         self._dbusservice.add_path('/History/MaxCellVoltage', self._settings['MaxCellVoltage'])
+	logging.info("History cell voltage min: %.3f, max: %.3f, totalAhDrawn: %d",  
+		self._settings['MinCellVoltage'], self._settings['MaxCellVoltage'], self._settings['TotalAhDrawn'])
 
 	self._bat = UbmsBattery(capacity=capacity, voltage=voltage) 
 
@@ -267,8 +269,11 @@ class DbusBatteryService:
 
 
     def _daily_stats(self):
+	if (self._dbusservice['/History/DischargedEnergy'] == 0): return
         logging.info("Updating stats, SOC: %d, Discharged: %.2f, Charged: %.2f ",self._bat.soc,  self._dbusservice['/History/DischargedEnergy'],  self._dbusservice['/History/ChargedEnergy'])
         self._dbusservice['/History/AverageDischarge'] = (6*self._dbusservice['/History/AverageDischarge'] + self._dbusservice['/History/DischargedEnergy'])/7 #rolling week
+      	self._dbusservice['/History/ChargedEnergy'] = 0
+       	self._dbusservice['/History/DischargedEnergy'] = 0
         self._dbusservice['/ConsumedAmphours'] = 0
         self.dailyResetDone = datetime.now().day 
 
@@ -297,8 +302,6 @@ class DbusBatteryService:
 		if datetime.fromtimestamp(time()).day != datetime.fromtimestamp(float(self._settings['TimeLastFull'])).day: 
 			logging.info("Battery fully charged, SOC %d." ,self._bat.soc )
 			self._settings['TimeLastFull'] = time() 
-                	self._dbusservice['/History/ChargedEnergy'] = 0
-                	self._dbusservice['/History/DischargedEnergy'] = 0
 
         self._dbusservice['/Status'] = (self._bat.mode &0xC)
         self._dbusservice['/Mode'] = (self._bat.mode &0x3)
@@ -334,7 +337,7 @@ class DbusBatteryService:
 	    if self._bat.current > 0:
 		#charging 
 	      	#calculate time to full
-		self._dbusservice['/TimeToGo'] = (100 - self._bat.soc*self._bat.capacity) * 36 / self._bat.current 
+		self._dbusservice['/TimeToGo'] = (100 - self._bat.soc)*self._bat.capacity * 36 / self._bat.current 
                 self._dbusservice['/History/ChargedEnergy'] += power * 1.666667e-5 #kWh
             else:
 		#discharging
