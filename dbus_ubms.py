@@ -281,10 +281,13 @@ class DbusBatteryService:
     def _update(self):
 #	self._dbusservice['/Alarms/CellImbalance'] = (self._bat.internalErrors & 0x20)>>5
 	deltaCellVoltage = self._bat.maxCellVoltage - self._bat.minCellVoltage
-	if (deltaCellVoltage > 0.1):
-		self._dbusservice['/Alarms/CellImbalance'] = 1
-	elif (deltaCellVoltage > 0.25):
-		self._dbusservice['/Alarms/CellImbalance'] = 2
+	if (deltaCellVoltage > 0.15):
+        	logging.error("Cell voltage imbalance: %.2fV, SOC: %d, #balancing: %d ", deltaCellVoltage, self._bat.soc, self._bat.numberOfModulesBalancing)
+
+		if (deltaCellVoltage > 0.25):
+			self._dbusservice['/Alarms/CellImbalance'] = 2
+		else:
+			self._dbusservice['/Alarms/CellImbalance'] = 1
 	else:
 		self._dbusservice['/Alarms/CellImbalance'] = 0
 
@@ -316,7 +319,7 @@ class DbusBatteryService:
         	self._dbusservice['/History/MaxCellVoltage'] = self._bat.maxCellVoltage
 		logging.info("New maximum cell voltage: %f", self._bat.maxCellVoltage)
         self._dbusservice['/System/MinCellVoltage'] = self._bat.minCellVoltage
-	if (self._bat.minCellVoltage < self._dbusservice['/History/MinCellVoltage'] ):
+	if (0 < self._bat.minCellVoltage < self._dbusservice['/History/MinCellVoltage'] ):
 	        self._dbusservice['/History/MinCellVoltage'] = self._bat.minCellVoltage
 		logging.info("New minimum cell voltage: %f", self._bat.minCellVoltage)
         self._dbusservice['/System/MinCellTemperature'] = self._bat.minCellTemperature
@@ -403,7 +406,7 @@ def main():
 	voltage = float(args.voltage)
         )
 
-    logging.info('Connected to dbus, and switching over to gobject.MainLoop() (= event based)')
+    logging.debug('Connected to dbus, and switching over to gobject.MainLoop() (= event based)')
     mainloop = gobject.MainLoop()
     mainloop.run()
 
