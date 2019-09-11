@@ -26,15 +26,15 @@ or download the above projects as archives, copy and unzip to root home
 
 ## Run from command line
 ```
- python dbus/dbus_ubms.py -i can0
+ python dbus_ubms.py -i can0
  or
- nohup python dbus/dbus_ubms.py -i can0 &
+ nohup python dbus_ubms.py -i can0 &
 ```
 
 ## Run as a service: 
 ```
- ln -s ./dbus_ubms/service /service/dbus-ubms.can0
- cp ./dbus_ubms/rc.local /data/rc.local
+ ln -s /home/root/dbus_ubms/service /service/dbus-ubms.can0
+ cp rc.local /data/rc.local
 ```
 
 ## Configuration of U-BMS
@@ -47,6 +47,7 @@ or download the above projects as archives, copy and unzip to root home
  connect battery voltage
  connect CAN and CAN 5V supply
  connect +12V for System and Ignition
+ in a system with x modules in series and multiple in parallel, module numbers 1 to x have to be assigned to one string, pack voltage calculation depends on this 
 ``` 
    
 
