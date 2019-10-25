@@ -52,6 +52,7 @@ class UbmsBattery(can.Listener):
         self.voltage = 0
 	self.current = 0
         self.temperature = 0
+	self.balanced = True
 	self.voltageAndCellTAlarms = 0
 	self.internalErrors = 0
 	self.currentAndPcbTAlarms = 0
@@ -281,8 +282,11 @@ class DbusBatteryService:
     def _update(self):
 #	self._dbusservice['/Alarms/CellImbalance'] = (self._bat.internalErrors & 0x20)>>5
 	deltaCellVoltage = self._bat.maxCellVoltage - self._bat.minCellVoltage
-	if (deltaCellVoltage > 0.15):
-        	logging.error("Cell voltage imbalance: %.2fV, SOC: %d, #balancing: %d ", deltaCellVoltage, self._bat.soc, self._bat.numberOfModulesBalancing)
+	if (deltaCellVoltage > 0.16):
+        	if self._bat.balanced and self._bat.numberOfModulesBalancing==0 :
+		#only log first occurence, which shows supposedly the highest difference
+			logging.error("Cell voltage imbalance: %.2fV, SOC: %d ", deltaCellVoltage, self._bat.soc)
+			self._bat.balanced = False
 
 		if (deltaCellVoltage > 0.25):
 			self._dbusservice['/Alarms/CellImbalance'] = 2
@@ -290,6 +294,7 @@ class DbusBatteryService:
 			self._dbusservice['/Alarms/CellImbalance'] = 1
 	else:
 		self._dbusservice['/Alarms/CellImbalance'] = 0
+		self._bat.balanced = True
 
 	self._dbusservice['/Alarms/LowVoltage'] =  (self._bat.voltageAndCellTAlarms & 0x10)>>3 
         self._dbusservice['/Alarms/HighVoltage'] =  (self._bat.voltageAndCellTAlarms & 0x20)>>4 
@@ -303,7 +308,7 @@ class DbusBatteryService:
         self._dbusservice['/Soc'] = self._bat.soc 
 	if self._bat.soc == 100 or self._bat.chargeComplete :  
 		if datetime.fromtimestamp(time()).day != datetime.fromtimestamp(float(self._settings['TimeLastFull'])).day: 
-			logging.info("Battery fully charged, SOC %d." ,self._bat.soc )
+			logging.info("Fully charged, SOC: %d, Discharged: %.2f, Charged: %.2f ",self._bat.soc,  self._dbusservice['/History/DischargedEnergy'],  self._dbusservice['/History/ChargedEnergy'])  
 			self._settings['TimeLastFull'] = time() 
 
         self._dbusservice['/Status'] = (self._bat.mode &0xC)
