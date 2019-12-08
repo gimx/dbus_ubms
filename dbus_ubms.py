@@ -282,16 +282,17 @@ class DbusBatteryService:
     def _update(self):
 #	self._dbusservice['/Alarms/CellImbalance'] = (self._bat.internalErrors & 0x20)>>5
 	deltaCellVoltage = self._bat.maxCellVoltage - self._bat.minCellVoltage
-	if (deltaCellVoltage > 0.16):
-        	if self._bat.balanced and self._bat.numberOfModulesBalancing==0 :
-		#only log first occurence, which shows supposedly the highest difference
-			logging.error("Cell voltage imbalance: %.2fV, SOC: %d ", deltaCellVoltage, self._bat.soc)
-			self._bat.balanced = False
 
-		if (deltaCellVoltage > 0.25):
-			self._dbusservice['/Alarms/CellImbalance'] = 2
-		else:
-			self._dbusservice['/Alarms/CellImbalance'] = 1
+	# flag cell imbalance, only log first occurence 
+	# and when not balancing (UBMS threshold is 0.15V) self._bat.numberOfModulesBalancing==0 :
+	if (deltaCellVoltage > 0.20) :
+		self._dbusservice['/Alarms/CellImbalance'] = 2
+		if self._bat.balanced: logging.error("Cell voltage imbalance: %.2fV, SOC: %d ", deltaCellVoltage, self._bat.soc)
+		self._bat.balanced = False
+	elif (deltaCellVoltage > 0.16):
+		self._dbusservice['/Alarms/CellImbalance'] = 1
+		if self._bat.balanced: logging.info("Cell voltage imbalance: %.2fV, SOC: %d ", deltaCellVoltage, self._bat.soc)
+		self._bat.balanced = False
 	else:
 		self._dbusservice['/Alarms/CellImbalance'] = 0
 		self._bat.balanced = True
