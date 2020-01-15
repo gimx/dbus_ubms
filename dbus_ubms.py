@@ -16,6 +16,7 @@ import logging
 import sys
 import os
 import dbus
+import itertools
 
 from time import time
 from datetime import datetime
@@ -46,6 +47,7 @@ class UbmsBattery(can.Listener):
     def __init__(self, voltage, capacity):
 	self.capacity = capacity # Ah
 	self.maxChargeVoltage = voltage 
+	self.numberOfModules = 10
 	self.chargeComplete = 0
         self.soc = 0
 	self.mode = 0
@@ -59,15 +61,15 @@ class UbmsBattery(can.Listener):
 	self.maxPcbTemperature = 0
 	self.maxCellTemperature = 0
 	self.minCellTemperature = 0
-	self.cellVoltages =[0 for i in range(22)]
-	self.moduleVoltage = [0 for i in range(22)]
+	self.cellVoltages =[(0,0,0,0) for i in range(self.numberOfModules)]
+	self.moduleVoltage = [0 for i in range(self.numberOfModules)]
+	self.moduleSoc = [0 for i in range(self.numberOfModules)]
 	self.maxCellVoltage = 3.2
 	self.minCellVoltage = 3.2
         self.maxChargeCurrent = self.capacity * 0.25
 	self.maxDischargeCurrent = self.capacity * 0.5
 	self.partnr = 0 
 	self.firmwareVersion = 'unknown'
-	self.numberOfModules = 0
 	self.numberOfModulesBalancing = 0
 
 
@@ -133,9 +135,11 @@ class UbmsBattery(can.Listener):
 #                logging.debug("mCurrents ", self.moduleCurrent)
 
         elif msg.arbitration_id in [0x6a, 0x6b]:
-                self.moduleSoc = struct.unpack('BBBBBBB', msg.data[1:msg.dlc])
-                logging.debug("mSoc ", self.moduleSoc)
-
+		iStart = (msg.arbitration_id - 0x6a) * 7 
+		fmt = 'B' * (msg.dlc - 1) 
+                mSoc = struct.unpack(fmt, msg.data[1:msg.dlc])
+		tuple((m * 100)>>8 for m in mSoc)
+		self.moduleSoc[iStart:] = mSoc
 
     def _print(self):
         print("SOC:", self.soc, "%"
@@ -156,7 +160,12 @@ class DbusBatteryService:
 	self.minUpdateDone = 0
 	self.dailyResetDone = 0
 	self._ci = can.interface.Bus(channel=connection, bustype='socketcan',
-                   can_filters=[{"can_id": 0x0cf, "can_mask": 0xff0}, {"can_id": 0x350, "can_mask": 0xff0}, {"can_id": 0x360, "can_mask": 0xff0}])
+                   can_filters=[{"can_id": 0x0cf, "can_mask": 0xff0}, 
+				{"can_id": 0x350, "can_mask": 0xff0}, 
+				{"can_id": 0x360, "can_mask": 0xff0},
+				{"can_id": 0x46a, "can_mask": 0xff0}, # module currents 
+				{"can_id": 0x06a, "can_mask": 0xff0}, # module SOC 
+			])
 
         # create a cyclic mode command message simulating a VMU master
         msg = can.Message(arbitration_id=0x440,
@@ -214,9 +223,9 @@ class DbusBatteryService:
         self._dbusservice.add_path('/System/BatteriesSeries', 2)
         self._dbusservice.add_path('/System/NrOfCellsPerBattery', 4)
         self._dbusservice.add_path('/System/MinCellVoltage', 3.0)
-        self._dbusservice.add_path('/System/MinVoltageCellId', '0M0')
+        self._dbusservice.add_path('/System/MinVoltageCellId', 'M_C_')
         self._dbusservice.add_path('/System/MaxCellVoltage', 4.2)
-        self._dbusservice.add_path('/System/MaxVoltageCellId', '0')
+        self._dbusservice.add_path('/System/MaxVoltageCellId', 'M_C_')
         self._dbusservice.add_path('/System/MinCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxPcbTemperature', 10.0)
@@ -293,12 +302,17 @@ class DbusBatteryService:
 	if (deltaCellVoltage > 0.25) :
 		self._dbusservice['/Alarms/CellImbalance'] = 2
 		if self._bat.balanced: 
-			logging.error("Cell voltage imbalance: %.2fV, SOC: %d ", deltaCellVoltage, self._bat.soc)
+			logging.error("Cell voltage imbalance: %.2fV, SOC: %d, @Module: %d ", deltaCellVoltage, self._bat.soc, self.moduleSoc.index(min(self.moduleSoc)))
 		        logging.info("SOC: %d ",self._bat.soc )
 		self._bat.balanced = False
 	elif (deltaCellVoltage > 0.18):
 		self._dbusservice['/Alarms/CellImbalance'] = 1
-		if self._bat.balanced: logging.info("Cell voltage imbalance: %.2fV, SOC: %d ", deltaCellVoltage, self._bat.soc)
+		if self._bat.balanced: 
+			chain = itertools.chain(*self._bat.cellVoltages)
+        		flatVList = list(chain)
+        		iMax = flatVList.index(max(flatVList))
+        		iMin = flatVList.index(min(flatVList))
+			logging.info("Cell voltage imbalance: %.2fV, iMin: %d, iMax %d, SOC: %d ", deltaCellVoltage, iMin, iMax, self._bat.soc)
 		self._bat.balanced = False
 	else:
 		self._dbusservice['/Alarms/CellImbalance'] = 0
@@ -327,6 +341,16 @@ class DbusBatteryService:
         power = self._bat.voltage * self._bat.current
         self._dbusservice['/Dc/0/Power'] = power 
         self._dbusservice['/Dc/0/Temperature'] = self._bat.maxCellTemperature
+	chain = itertools.chain(*self._bat.cellVoltages)
+	flatVList = list(chain)
+	index = flatVList.index(max(flatVList))	
+	m = index / 4 
+	c = index % 4 
+        self._dbusservice['/System/MaxVoltageCellId'] = 'M'+str(m)+'C'+str(c)
+ 	index = flatVList.index(min(flatVList))
+        m = index / 4
+        c = index % 4 
+        self._dbusservice['/System/MinVoltageCellId'] = 'M'+str(m)+'C'+str(c) 
         self._dbusservice['/System/MaxCellVoltage'] = self._bat.maxCellVoltage
 	if (self._bat.maxCellVoltage > self._dbusservice['/History/MaxCellVoltage'] ):
         	self._dbusservice['/History/MaxCellVoltage'] = self._bat.maxCellVoltage
