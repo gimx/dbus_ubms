@@ -346,11 +346,11 @@ class DbusBatteryService:
 	index = flatVList.index(max(flatVList))	
 	m = index / 4 
 	c = index % 4 
-        self._dbusservice['/System/MaxVoltageCellId'] = 'M'+str(m)+'C'+str(c)
+        self._dbusservice['/System/MaxVoltageCellId'] = 'M'+str(m+1)+'C'+str(c+1)
  	index = flatVList.index(min(flatVList))
         m = index / 4
         c = index % 4 
-        self._dbusservice['/System/MinVoltageCellId'] = 'M'+str(m)+'C'+str(c) 
+        self._dbusservice['/System/MinVoltageCellId'] = 'M'+str(m+1)+'C'+str(c+1) 
         self._dbusservice['/System/MaxCellVoltage'] = self._bat.maxCellVoltage
 	if (self._bat.maxCellVoltage > self._dbusservice['/History/MaxCellVoltage'] ):
         	self._dbusservice['/History/MaxCellVoltage'] = self._bat.maxCellVoltage
