@@ -132,9 +132,9 @@ class UbmsBattery(can.Listener):
 #                self.moduleCurrent = struct.unpack('>hhh', ''.join(chr(i) for i in msg.data[2:msg.dlc]))
 #                logging.debug("mCurrents ", self.moduleCurrent)
 
-#        elif msg.arbitration_id in [0x6a]:
-#                self.moduleSoc = struct.unpack('BBBBBBB', msg.data[1:msg.dlc])
-#                logging.debug("mSoc ", self.moduleSoc)
+        elif msg.arbitration_id in [0x6a, 0x6b]:
+                self.moduleSoc = struct.unpack('BBBBBBB', msg.data[1:msg.dlc])
+                logging.debug("mSoc ", self.moduleSoc)
 
 
     def _print(self):
@@ -187,7 +187,9 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Dc/0/Power', 0.0)
         self._dbusservice.add_path('/Dc/0/Current', 0.0)
         self._dbusservice.add_path('/Soc', 20)
+        self._dbusservice.add_path('/Soh', 100)
         self._dbusservice.add_path('/Capacity', int(capacity))
+        self._dbusservice.add_path('/InstalledCapacity', int(capacity))
         self._dbusservice.add_path('/TimeToGo', 600)
         self._dbusservice.add_path('/ConsumedAmphours', 0)
         self._dbusservice.add_path('/Dc/0/Temperature', 25)
@@ -206,12 +208,15 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Balancing', 0)
         self._dbusservice.add_path('/System/HasTemperature', 1)
         self._dbusservice.add_path('/System/NrOfBatteries', 10)
+        self._dbusservice.add_path('/System/NrOfModulesOnline', 10)
         self._dbusservice.add_path('/System/NrOfBatteriesBalancing', 0)
         self._dbusservice.add_path('/System/BatteriesParallel', 5)
         self._dbusservice.add_path('/System/BatteriesSeries', 2)
         self._dbusservice.add_path('/System/NrOfCellsPerBattery', 4)
         self._dbusservice.add_path('/System/MinCellVoltage', 3.0)
+        self._dbusservice.add_path('/System/MinCellVoltageCellId', 0)
         self._dbusservice.add_path('/System/MaxCellVoltage', 4.2)
+        self._dbusservice.add_path('/System/MaxCellVoltageCellId', 0)
         self._dbusservice.add_path('/System/MinCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxPcbTemperature', 10.0)
@@ -285,11 +290,13 @@ class DbusBatteryService:
 
 	# flag cell imbalance, only log first occurence 
 	# and when not balancing (UBMS threshold is 0.15V) self._bat.numberOfModulesBalancing==0 :
-	if (deltaCellVoltage > 0.20) :
+	if (deltaCellVoltage > 0.25) :
 		self._dbusservice['/Alarms/CellImbalance'] = 2
-		if self._bat.balanced: logging.error("Cell voltage imbalance: %.2fV, SOC: %d ", deltaCellVoltage, self._bat.soc)
+		if self._bat.balanced: 
+			logging.error("Cell voltage imbalance: %.2fV, SOC: %d ", deltaCellVoltage, self._bat.soc)
+		        logging.info("SOC: %d ",self._bat.soc )
 		self._bat.balanced = False
-	elif (deltaCellVoltage > 0.16):
+	elif (deltaCellVoltage > 0.18):
 		self._dbusservice['/Alarms/CellImbalance'] = 1
 		if self._bat.balanced: logging.info("Cell voltage imbalance: %.2fV, SOC: %d ", deltaCellVoltage, self._bat.soc)
 		self._bat.balanced = False
@@ -353,7 +360,7 @@ class DbusBatteryService:
 		self._dbusservice['/ConsumedAmphours'] += self._bat.current * 0.016667 #Ah
 		self._dbusservice['/History/TotalAhDrawn'] += self._bat.current * 0.016667 #Ah
                 self._dbusservice['/History/DischargedEnergy'] += power * 1.666667e-5 #kWh
-		#calculate time to empty
+		#calculate time to empty/full
 		try:
 			self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36/(-self._bat.current)
 		except:
