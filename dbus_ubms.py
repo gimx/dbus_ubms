@@ -29,7 +29,7 @@ from vedbus import VeDbusService
 from ve_utils import exit_on_error
 from settingsdevice import SettingsDevice 
 
-VERSION = '0.7'
+VERSION = '0.8'
 
 class UbmsBattery(can.Listener):
     opModes = {
@@ -214,9 +214,9 @@ class DbusBatteryService:
         self._dbusservice.add_path('/System/BatteriesSeries', 2)
         self._dbusservice.add_path('/System/NrOfCellsPerBattery', 4)
         self._dbusservice.add_path('/System/MinCellVoltage', 3.0)
-        self._dbusservice.add_path('/System/MinCellVoltageCellId', 0)
+        self._dbusservice.add_path('/System/MinVoltageCellId', '0M0')
         self._dbusservice.add_path('/System/MaxCellVoltage', 4.2)
-        self._dbusservice.add_path('/System/MaxCellVoltageCellId', 0)
+        self._dbusservice.add_path('/System/MaxVoltageCellId', '0')
         self._dbusservice.add_path('/System/MinCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxPcbTemperature', 10.0)
@@ -341,7 +341,7 @@ class DbusBatteryService:
         self._dbusservice['/Info/MaxChargeCurrent'] = self._bat.maxChargeCurrent
         self._dbusservice['/Info/MaxDischargeCurrent'] = self._bat.maxDischargeCurrent
         self._dbusservice['/Info/MaxChargeVoltage'] = self._bat.maxChargeVoltage
-        self._dbusservice['/System/NrOfBatteries'] =  self._bat.numberOfModules
+        self._dbusservice['/System/NrOfModulesOnline'] =  self._bat.numberOfModules
         self._dbusservice['/System/NrOfBatteriesBalancing'] = self._bat.numberOfModulesBalancing
 	
 	if self._bat.current > 0  and datetime.now().day != self.dailyResetDone : #on first occurence of a positive bat current 
