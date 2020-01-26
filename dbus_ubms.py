@@ -45,7 +45,7 @@ class UbmsBattery(can.Listener):
 	}
 
     def __init__(self, voltage, capacity):
-	self.capacity = capacity # Ah
+	self.capacity = capacity
 	self.maxChargeVoltage = voltage 
 	self.numberOfModules = 10
 	self.chargeComplete = 0
@@ -330,7 +330,7 @@ class DbusBatteryService:
         self._dbusservice['/Soc'] = self._bat.soc 
 	if self._bat.soc == 100 or self._bat.chargeComplete :  
 		if datetime.fromtimestamp(time()).day != datetime.fromtimestamp(float(self._settings['TimeLastFull'])).day: 
-			logging.info("Fully charged, SOC: %d, Discharged: %.2f, Charged: %.2f ",self._bat.soc,  self._dbusservice['/History/DischargedEnergy'],  self._dbusservice['/History/ChargedEnergy'])  
+			logging.info("Fully charged, SOC(min/max/avg): %d/%d/%d, Discharged: %.2f, Charged: %.2f ",min(self._bat.moduleSoc), max(self._bat.moduleSoc), self._bat.soc,  self._dbusservice['/History/DischargedEnergy'],  self._dbusservice['/History/ChargedEnergy'])  
 			self._settings['TimeLastFull'] = time() 
 
         self._dbusservice['/Status'] = (self._bat.mode &0xC)
