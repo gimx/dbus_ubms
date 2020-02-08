@@ -63,6 +63,7 @@ class UbmsBattery(can.Listener):
 	self.minCellTemperature = 0
 	self.cellVoltages =[(0,0,0,0) for i in range(self.numberOfModules)]
 	self.moduleVoltage = [0 for i in range(self.numberOfModules)]
+	self.moduleCurrent = [0 for i in range(self.numberOfModules)]
 	self.moduleSoc = [0 for i in range(self.numberOfModules)]
 	self.maxCellVoltage = 3.2
 	self.minCellVoltage = 3.2
@@ -130,9 +131,12 @@ class UbmsBattery(can.Listener):
 		if module == self.numberOfModules-1:
 			self.voltage = sum(self.moduleVoltage[0:2])/1000.0 #adjust slice to number of modules in series
 
-#        elif msg.arbitration_id in [0x46a, 0x46b]:
-#                self.moduleCurrent = struct.unpack('>hhh', ''.join(chr(i) for i in msg.data[2:msg.dlc]))
-#                logging.debug("mCurrents ", self.moduleCurrent)
+        elif msg.arbitration_id in [0x46a, 0x46b, 0x46c, 0x46d]:
+		iStart = (msg.arbitration_id - 0x46a) * 3 
+		fmt = '>hhh' * (msg.dlc - 2)/2
+                mCurrent = struct.unpack(fmt, ''.join(chr(i) for i in msg.data[2:msg.dlc]))
+		self.moduleCurrent[iStart:] = mCurrent		
+                logging.debug("mCurrents ", self.moduleCurrent)
 
         elif msg.arbitration_id in [0x6a, 0x6b]:
 		iStart = (msg.arbitration_id - 0x6a) * 7 
@@ -163,7 +167,7 @@ class DbusBatteryService:
                    can_filters=[{"can_id": 0x0cf, "can_mask": 0xff0}, 
 				{"can_id": 0x350, "can_mask": 0xff0}, 
 				{"can_id": 0x360, "can_mask": 0xff0},
-				{"can_id": 0x46a, "can_mask": 0xff0}, # module currents 
+#				{"can_id": 0x46a, "can_mask": 0xff0}, # module currents 
 				{"can_id": 0x06a, "can_mask": 0xff0}, # module SOC 
 			])
 
@@ -192,14 +196,14 @@ class DbusBatteryService:
         # Create battery specific objects
         self._dbusservice.add_path('/Status', 0)
 	self._dbusservice.add_path('/Mode', 1, writeable=True, onchangecallback=self._transmit_mode) 
-        self._dbusservice.add_path('/Dc/0/Voltage', 0.0)
-        self._dbusservice.add_path('/Dc/0/Power', 0.0)
-        self._dbusservice.add_path('/Dc/0/Current', 0.0)
-        self._dbusservice.add_path('/Soc', 20)
+#        self._dbusservice.add_path('/Dc/0/Voltage', 0.0, gettextcallback=get_text_cb)
+#        self._dbusservice.add_path('/Dc/0/Power', 0.0)
+#        self._dbusservice.add_path('/Dc/0/Current', 0.0)
+#        self._dbusservice.add_path('/Soc', 20)
         self._dbusservice.add_path('/Soh', 100)
         self._dbusservice.add_path('/Capacity', int(capacity))
         self._dbusservice.add_path('/InstalledCapacity', int(capacity))
-        self._dbusservice.add_path('/TimeToGo', 600)
+#        self._dbusservice.add_path('/TimeToGo', 600)
         self._dbusservice.add_path('/ConsumedAmphours', 0)
         self._dbusservice.add_path('/Dc/0/Temperature', 25)
         self._dbusservice.add_path('/Info/MaxChargeCurrent', 70)
@@ -222,13 +226,28 @@ class DbusBatteryService:
         self._dbusservice.add_path('/System/BatteriesParallel', 5)
         self._dbusservice.add_path('/System/BatteriesSeries', 2)
         self._dbusservice.add_path('/System/NrOfCellsPerBattery', 4)
-        self._dbusservice.add_path('/System/MinCellVoltage', 3.0)
+#        self._dbusservice.add_path('/System/MinCellVoltage', 3.0)
         self._dbusservice.add_path('/System/MinVoltageCellId', 'M_C_')
-        self._dbusservice.add_path('/System/MaxCellVoltage', 4.2)
+#        self._dbusservice.add_path('/System/MaxCellVoltage', 4.2)
         self._dbusservice.add_path('/System/MaxVoltageCellId', 'M_C_')
         self._dbusservice.add_path('/System/MinCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxPcbTemperature', 10.0)
+
+	self._summeditems = {
+                        '/System/MaxCellVoltage': {'gettext': '%.2F V'},
+                        '/System/MinCellVoltage': {'gettext': '%.2F V'},
+                        '/Dc/0/Voltage': {'gettext': '%.2F V'},
+                        '/Dc/0/Current': {'gettext': '%.1F A'},
+                        '/Dc/0/Power': {'gettext': '%.0F W'},
+                        '/Soc': {'gettext': '%.0F %%'},
+                        '/TimeToGo': {'gettext': '%.0F s'}
+#                        '/ConsumedAmphours': {'gettext': '%.1F Ah'}
+        }
+        for path in self._summeditems.keys():
+                        self._dbusservice.add_path(path, value=None, gettextcallback=self._gettext)
+
+
 
 	self._settings = SettingsDevice(
     		bus=dbus.SystemBus() if (platform.machine() == 'armv7l') else dbus.SessionBus(),
@@ -257,6 +276,12 @@ class DbusBatteryService:
 
         gobject.timeout_add( self._settings['interval'], exit_on_error, self._update)
 
+
+    def _gettext(self, path, value):
+	item = self._summeditems.get(path)
+	if item is not None:
+		return item['gettext'] % value
+	return str(value)
 
     def _transmit_mode(self, path, value):
 	if not isinstance(self.cyclicModeTask, can.ModifiableCyclicTaskABC):
@@ -298,7 +323,6 @@ class DbusBatteryService:
 	deltaCellVoltage = self._bat.maxCellVoltage - self._bat.minCellVoltage
 
 	# flag cell imbalance, only log first occurence 
-	# and when not balancing (UBMS threshold is 0.15V) self._bat.numberOfModulesBalancing==0 :
 	if (deltaCellVoltage > 0.25) :
 		self._dbusservice['/Alarms/CellImbalance'] = 2
 		if self._bat.balanced: 
@@ -306,7 +330,9 @@ class DbusBatteryService:
 		        logging.info("SOC: %d ",self._bat.soc )
 		self._bat.balanced = False
 	elif (deltaCellVoltage > 0.18):
-		self._dbusservice['/Alarms/CellImbalance'] = 1
+		# warn only if not already balancing (UBMS threshold is 0.15V) 
+		if self._bat.numberOfModulesBalancing == 0 :
+			self._dbusservice['/Alarms/CellImbalance'] = 1
 		if self._bat.balanced: 
 			chain = itertools.chain(*self._bat.cellVoltages)
         		flatVList = list(chain)
@@ -323,8 +349,8 @@ class DbusBatteryService:
 	self._dbusservice['/Alarms/LowSoc'] = (self._bat.voltageAndCellTAlarms & 0x08)>>3 
         self._dbusservice['/Alarms/HighDischargeCurrent'] = (self._bat.currentAndPcbTAlarms & 0x3) 
 
-#        self._dbusservice['/Alarms/HighTemperature'] = (self._bat.currentAndPcbTAlarms & 0x18)>>3  
-	self._dbusservice['/Alarms/HighTemperature'] =	(self._bat.voltageAndCellTAlarms &0x6)>>1
+#       flag high cell temperature alarm and high pcb temperature alarm  
+	self._dbusservice['/Alarms/HighTemperature'] =	(self._bat.voltageAndCellTAlarms &0x6)>>1 | (self._bat.currentAndPcbTAlarms & 0x18)>>3
         self._dbusservice['/Alarms/LowTemperature'] = (self._bat.mode & 0x60)>>5 
 
         self._dbusservice['/Soc'] = self._bat.soc 
@@ -421,11 +447,11 @@ def main():
 	args.interface = 'can0'
 
     if not args.capacity:
-        logging.info('Battery capacity not specified, using default (550Ah)')
-	args.capacity = 550
+        logging.warning('Battery capacity not specified, using default (130Ah)')
+	args.capacity = 130 
 
     if not args.voltage:
-        logging.info('Maximum charge voltage not specified, using default 14.5V')
+        logging.warning('Maximum charge voltage not specified, using default 14.5V')
 	args.voltage = 14.5
 	
     logging.info('Starting dbus_ubms %s on %s ' %
