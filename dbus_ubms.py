@@ -19,13 +19,16 @@ from datetime import datetime
 import struct
 from argparse import ArgumentParser
 
+from ubmsbattery import * 
+ 
+
 # our own packages
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), 'ext/velib_python'))
 from vedbus import VeDbusService
 from ve_utils import exit_on_error
 from settingsdevice import SettingsDevice 
 
-VERSION = '0.8'
+VERSION = '0.9'
 
 def handle_changed_setting(setting, oldvalue, newvalue):
     logging.debug('setting changed, setting: %s, old: %s, new: %s' % (setting, oldvalue, newvalue))
@@ -35,19 +38,8 @@ class DbusBatteryService:
     def __init__(self, servicename, deviceinstance, voltage, capacity, productname='Valence U-BMS', connection='can0'):
 	self.minUpdateDone = 0
 	self.dailyResetDone = 0
-	self._ci = can.interface.Bus(channel=connection, bustype='socketcan',
-                   can_filters=[{"can_id": 0x0cf, "can_mask": 0xff0}, 
-				{"can_id": 0x350, "can_mask": 0xff0}, 
-				{"can_id": 0x360, "can_mask": 0xff0},
-#				{"can_id": 0x46a, "can_mask": 0xff0}, # module currents 
-				{"can_id": 0x06a, "can_mask": 0xff0}, # module SOC 
-			])
 
-        # create a cyclic mode command message simulating a VMU master
-        msg = can.Message(arbitration_id=0x440,
-                      data=[0, 1, 0, 0], #default: charge mode
-                      extended_id=False)
-       	self.cyclicModeTask = self._ci.send_periodic(msg, 0.1) #UBMS in slave mode times out after 20s
+	self._bat = UbmsBattery(capacity=capacity, voltage=voltage, connection=connection)        
 
         self._dbusservice = VeDbusService(servicename+'.socketcan_'+connection+'_di'+str(deviceinstance))
 
@@ -68,14 +60,9 @@ class DbusBatteryService:
         # Create battery specific objects
         self._dbusservice.add_path('/Status', 0)
 	self._dbusservice.add_path('/Mode', 1, writeable=True, onchangecallback=self._transmit_mode) 
-#        self._dbusservice.add_path('/Dc/0/Voltage', 0.0, gettextcallback=get_text_cb)
-#        self._dbusservice.add_path('/Dc/0/Power', 0.0)
-#        self._dbusservice.add_path('/Dc/0/Current', 0.0)
-#        self._dbusservice.add_path('/Soc', 20)
         self._dbusservice.add_path('/Soh', 100)
         self._dbusservice.add_path('/Capacity', int(capacity))
         self._dbusservice.add_path('/InstalledCapacity', int(capacity))
-#        self._dbusservice.add_path('/TimeToGo', 600)
         self._dbusservice.add_path('/ConsumedAmphours', 0)
         self._dbusservice.add_path('/Dc/0/Temperature', 25)
         self._dbusservice.add_path('/Info/MaxChargeCurrent', 70)
@@ -98,9 +85,7 @@ class DbusBatteryService:
         self._dbusservice.add_path('/System/BatteriesParallel', 5)
         self._dbusservice.add_path('/System/BatteriesSeries', 2)
         self._dbusservice.add_path('/System/NrOfCellsPerBattery', 4)
-#        self._dbusservice.add_path('/System/MinCellVoltage', 3.0)
         self._dbusservice.add_path('/System/MinVoltageCellId', 'M_C_')
-#        self._dbusservice.add_path('/System/MaxCellVoltage', 4.2)
         self._dbusservice.add_path('/System/MaxVoltageCellId', 'M_C_')
         self._dbusservice.add_path('/System/MinCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxCellTemperature', 10.0)
@@ -142,9 +127,6 @@ class DbusBatteryService:
 	logging.info("History cell voltage min: %.3f, max: %.3f, totalAhDrawn: %d",  
 		self._settings['MinCellVoltage'], self._settings['MaxCellVoltage'], self._settings['TotalAhDrawn'])
 
-	self._bat = UbmsBattery(capacity=capacity, voltage=voltage) 
-
-	notifier = can.Notifier(self._ci, [self._bat])
 
         gobject.timeout_add( self._settings['interval'], exit_on_error, self._update)
 
@@ -156,19 +138,12 @@ class DbusBatteryService:
 	return str(value)
 
     def _transmit_mode(self, path, value):
-	if not isinstance(self.cyclicModeTask, can.ModifiableCyclicTaskABC):
-        	logging.error("This interface doesn't seem to support modification of cyclic message")
-        	return
-	logging.info('Changing mode to %d %s', value, type(self.cyclicModeTask))
-    	msg = can.Message(arbitration_id=0x440,
-                      data=[0, min(max(0,int(value)),2), 0, 0],
-                      extended_id=False)
-	self.cyclicModeTask.modify_data(msg)
+	logging.info('Changing mode to %d', value)
+	self._bat.set_mode(value)
 
 
     def __del__(self):
 	self._safe_history()
-	self._ci.close()
 	logging.info('Stopping dbus_ubms')
 
 
