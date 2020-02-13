@@ -36,7 +36,7 @@ class UbmsBattery(can.Listener):
 	8:"Float"
 	}
 
-    def __init__(self, voltage, capacity):
+    def __init__(self, voltage, capacity, connection):
 	self.capacity = capacity
 	self.maxChargeVoltage = voltage 
 	self.numberOfModules = 10
@@ -78,8 +78,9 @@ class UbmsBattery(can.Listener):
                       data=[0, 1, 0, 0], #default: charge mode
                       extended_id=False)
         self.cyclicModeTask = self._ci.send_periodic(msg, 0.1) #UBMS in slave mo
-		
-        logging.debug("%s /DeviceInstance = %d" % (servicename+'.socketcan_'+connection+'_di'+str(deviceinstance), deviceinstance))
+#	notifier = can.Notifier(self._ci, [bat])
+        
+	logging.info("Valence U-BMS Decoder listening on %s" % connection)
 
 
     def on_message_received(self, msg):
@@ -125,7 +126,7 @@ class UbmsBattery(can.Listener):
                 self.maxPcbTemperature =  msg.data[3]-40
 		self.maxCellVoltage =  struct.unpack('<h', msg.data[4:6])[0]*0.001
 		self.minCellVoltage =  struct.unpack('<h', msg.data[6:8])[0]*0.001
-		logging.debug("Umin %.3fV Umax %.3fV", self.minCellVoltage, self.maxCellVoltage)
+		logging.debug("Umin %1.3fV Umax %1.3fV", self.minCellVoltage, self.maxCellVoltage)
 
         elif msg.arbitration_id in [0x350, 0x352, 0x354, 0x356, 0x358, 0x35A, 0x35C, 0x35E, 0x360, 0x362, 0x364]:
 		module = (msg.arbitration_id - 0x350) >> 1
@@ -153,19 +154,9 @@ class UbmsBattery(can.Listener):
 		tuple((m * 100)>>8 for m in mSoc)
 		self.moduleSoc[iStart:] = mSoc
 
-    def _print(self):
-        print("SOC:", self.soc, "%"
-        	"I:", self.current, "A", 
-		"U:", self.voltage, "V",
-		"T:", self.maxCellTemperature, "degC")
-	print("Umin:", self.minCellVoltage, "Umax:", self.maxCellVoltage)
-
-        return True
-
-
-	self._bat = UbmsBattery(capacity=capacity, voltage=voltage) 
-
-	notifier = can.Notifier(self._ci, [self._bat])
+    def prnt(self):
+        print("SOC: %2d%, I: %3dA, U: %2.2fV, T:%2.1fC" % (self.soc, self.current, self.voltage, self.maxCellTemperature))
+	print("Umin: %1.2d, Umax: %1.2f" % (self.minCellVoltage, self.maxCellVoltage))
 
 
     def _transmit_mode(self, path, value):
@@ -180,16 +171,30 @@ class UbmsBattery(can.Listener):
 
 
 # === All code below is to simply run it from the commandline for debugging purposes ===
-
-# It will create a dbus service called com.victronenergy.battery
-# To try this on commandline, start this program in one terminal, and try these commands
-# from another terminal:
-# dbus -y com.victronenergy.battery /Soc GetValue
-
 def main():
-		
+	
+    	logger = can.Logger('logfile.asc')
+
+	bat = UbmsBattery(capacity=650, voltage=29.2, connection='can0') 
+
+	listeners = [
+        	logger,          # Regular Listener object
+		bat
+    	]
+    	
+    	notifier = can.Notifier(bat._ci, listeners)
+	for msg in bat._ci:
+		bat.prnt()
+    	
+	# Clean-up
+    	notifier.stop()
+    	bat._ci.shutdown()
+
+
     	logging.basicConfig(format='%(levelname)-8s %(message)s',
-                level=(logging.DEBUG if args.debug else logging.INFO))
+                level=(logging.DEBUG))
+	
+	print(bat)
 
 
 if __name__ == "__main__":
