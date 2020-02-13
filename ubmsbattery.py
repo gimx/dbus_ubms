@@ -72,7 +72,7 @@ class UbmsBattery(can.Listener):
                       data=[0, 1, 0, 0], #default: charge mode
                       extended_id=False)
         self.cyclicModeTask = self._ci.send_periodic(msg, 0.1) #UBMS in slave mo
-#	notifier = can.Notifier(self._ci, [bat])
+	notifier = can.Notifier(self._ci, [self])
         
 	logging.info("Valence U-BMS Decoder listening on %s" % connection)
 
