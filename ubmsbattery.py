@@ -173,12 +173,12 @@ class UbmsBattery(can.Listener):
 # === All code below is to simply run it from the commandline for debugging purposes ===
 def main():
 	
-    	logger = can.Logger('logfile.asc')
+#    	logger = can.Logger('logfile.asc')
 
 	bat = UbmsBattery(capacity=650, voltage=29.2, connection='can0') 
 
 	listeners = [
-        	logger,          # Regular Listener object
+#        	logger,          # Regular Listener object
 		bat
     	]
     	
@@ -193,8 +193,6 @@ def main():
 
     	logging.basicConfig(format='%(levelname)-8s %(message)s',
                 level=(logging.DEBUG))
-	
-	print(bat)
 
 
 if __name__ == "__main__":
