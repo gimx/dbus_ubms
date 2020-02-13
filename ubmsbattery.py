@@ -7,13 +7,7 @@ In order for this to work the first x modules of a xSyP pack should have assigne
 The BMS should be operated in slave mode, VMU packages are being sent 
 
 """
-#import gobject
-#import platform
-#import argparse
 import logging
-#import sys
-#import os
-#import dbus
 import itertools
 
 from time import time
@@ -155,11 +149,11 @@ class UbmsBattery(can.Listener):
 		self.moduleSoc[iStart:] = mSoc
 
     def prnt(self):
-        print("SOC: %2d%, I: %3dA, U: %2.2fV, T:%2.1fC" % (self.soc, self.current, self.voltage, self.maxCellTemperature))
+        print("SOC: %2d, I: %3dA, U: %2.2fV, T:%2.1fC" % (self.soc, self.current, self.voltage, self.maxCellTemperature))
 	print("Umin: %1.2d, Umax: %1.2f" % (self.minCellVoltage, self.maxCellVoltage))
 
 
-    def _transmit_mode(self, path, value):
+    def set_mode(self, value):
 	if not isinstance(self.cyclicModeTask, can.ModifiableCyclicTaskABC):
         	logging.error("This interface doesn't seem to support modification of cyclic message")
         	return
