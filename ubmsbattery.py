@@ -22,12 +22,11 @@ class UbmsBattery(can.Listener):
     opModes = {
 	0:"Standby",
 	1:"Charge",
-	2:"Drive"	
-	}
-
-    state = {
-	4:"Equalize",
-	8:"Float"
+	2:"Drive",
+	5:"Charge Equalize",
+	6:"Drive Equalize",
+	9:"Charge Float",
+	9:"Drive Float"
 	}
 
     def __init__(self, voltage, capacity, connection):
@@ -63,7 +62,7 @@ class UbmsBattery(can.Listener):
                    can_filters=[{"can_id": 0x0cf, "can_mask": 0xff0},
                                 {"can_id": 0x350, "can_mask": 0xff0},
                                 {"can_id": 0x360, "can_mask": 0xff0},
-#                               {"can_id": 0x46a, "can_mask": 0xff0}, # module c
+                                {"can_id": 0x46a, "can_mask": 0xff0}, # module c
                                 {"can_id": 0x06a, "can_mask": 0xff0}, # module S
                         ])
 
@@ -84,7 +83,13 @@ class UbmsBattery(can.Listener):
 		self.voltageAndCellTAlarms = msg.data[2]
 		self.internalErrors = msg.data[3]
 		self.currentAndPcbTAlarms = msg.data[4]
-		self.numberOfModules = msg.data[5]
+
+		self.numberOfModulesCommunicating = msg.data[5]
+
+		#if no module flagged missing and not too many on the bus, then this is the number the U-BMS was configured for
+		if (msg.data[2] & 1 == 0) and (msg.data[3] & 2 == 0):
+			self.numberOfModules = self.numberOfModulesCommunicating 
+
 		self.numberOfModulesBalancing = msg.data[6]
 		logging.debug("SOC: %d Mode: %X",self.soc, self.mode&0x1F)
 
@@ -92,7 +97,7 @@ class UbmsBattery(can.Listener):
 #                self.voltage = msg.data[0] * 1 # voltage scale factor depends on BMS configuration! 
                 self.current = struct.unpack('b',chr(msg.data[1]))[0]
 
-		if (self.mode & 0x2) == 2: #provided in drive mode only
+		if (self.mode & 0x2) != 0 : #provided in drive mode only
 			self.maxDischargeCurrent =  struct.unpack('<h', msg.data[3:5])[0]
 			self.maxChargeCurrent =  struct.unpack('<h', chr(msg.data[5])+chr(msg.data[7]))[0]
 			logging.debug("Icmax %dA Idmax %dA", self.maxChargeCurrent, self.maxDischargeCurrent)
@@ -103,7 +108,7 @@ class UbmsBattery(can.Listener):
 		#charge mode only 
 		if (self.mode & 0x1) != 0:
 			self.chargeComplete = (msg.data[3] & 0x4) >> 2
-#               		self.maxChargeVoltage = struct.unpack('<h', msg.data[1:3])[0]
+               		self.maxChargeVoltage2 = struct.unpack('<h', msg.data[1:3])[0]
 			
 			#only apply lower charge current when equalizing 
 			if (self.mode & 0x18) == 0x18 : 
@@ -112,7 +117,6 @@ class UbmsBattery(can.Listener):
 			#allow charge with 0.5C
 				self.maxChargeCurrent = self.capacity * 0.5 
 			
-			logging.debug("CCL: %d CVL: %d",self.maxChargeCurrent, self.maxChargeVoltage)
 
 	elif msg.arbitration_id == 0xc4:
 		self.maxCellTemperature =  msg.data[0]-40
@@ -131,12 +135,14 @@ class UbmsBattery(can.Listener):
                 self.cellVoltages[module] = self.cellVoltages[module]+ tuple(struct.unpack('>h', msg.data[2:msg.dlc]))
 		self.moduleVoltage[module] = sum(self.cellVoltages[module]) 
 		logging.debug("Umodule %d: %fmV", module, self.moduleVoltage[module])
+
+		#update pack voltage at each arrival of the last modules cell voltages
 		if module == self.numberOfModules-1:
 			self.voltage = sum(self.moduleVoltage[0:2])/1000.0 #adjust slice to number of modules in series
 
         elif msg.arbitration_id in [0x46a, 0x46b, 0x46c, 0x46d]:
 		iStart = (msg.arbitration_id - 0x46a) * 3 
-		fmt = '>hhh' * (msg.dlc - 2)/2
+		fmt = '>' +'h' * ((msg.dlc - 2)/2)
                 mCurrent = struct.unpack(fmt, ''.join(chr(i) for i in msg.data[2:msg.dlc]))
 		self.moduleCurrent[iStart:] = mCurrent		
                 logging.debug("mCurrents ", self.moduleCurrent)
@@ -145,12 +151,24 @@ class UbmsBattery(can.Listener):
 		iStart = (msg.arbitration_id - 0x6a) * 7 
 		fmt = 'B' * (msg.dlc - 1) 
                 mSoc = struct.unpack(fmt, msg.data[1:msg.dlc])
-		tuple((m * 100)>>8 for m in mSoc)
-		self.moduleSoc[iStart:] = mSoc
+		self.moduleSoc[iStart:] = tuple((m * 100)>>8 for m in mSoc) 
 
     def prnt(self):
+	print(self.mode)
+	print(self.opModes[self.mode])
         print("SOC: %2d, I: %3dA, U: %2.2fV, T:%2.1fC" % (self.soc, self.current, self.voltage, self.maxCellTemperature))
-	print("Umin: %1.2d, Umax: %1.2f" % (self.minCellVoltage, self.maxCellVoltage))
+	print("Umin: %1.2f, Umax: %1.2f Udelta: %1.2f" % (self.minCellVoltage, self.maxCellVoltage, self.maxCellVoltage-self.minCellVoltage))
+	print("CCL: %4.0f A CVL: %2.2f V" % (self.maxChargeCurrent, self.maxChargeVoltage))
+	chain = itertools.chain(*self.cellVoltages)
+        flatVList = list(chain)
+        iMax = flatVList.index(max(flatVList))
+        iMin = flatVList.index(min(flatVList))
+        print("iMin: %s, iMax %s" % ('M'+str(iMin/4+1)+'C'+str(iMin%4+1), 'M'+str(iMax/4+1)+'C'+str(iMax%4+1)))
+	print(self.moduleSoc)
+	print(self.moduleVoltage)
+	print(self.moduleCurrent)
+	#print(self.cellVoltages)
+
 
 
     def set_mode(self, value):
@@ -172,13 +190,14 @@ def main():
 	bat = UbmsBattery(capacity=650, voltage=29.2, connection='can0') 
 
 	listeners = [
-#        	logger,          # Regular Listener object
+	#        	logger,          # Regular Listener object
 		bat
     	]
     	
     	notifier = can.Notifier(bat._ci, listeners)
 	for msg in bat._ci:
-		bat.prnt()
+		if msg.arbitration_id == 0x6b:
+			bat.prnt()
     	
 	# Clean-up
     	notifier.stop()
