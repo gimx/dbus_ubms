@@ -81,6 +81,9 @@ class DbusBatteryService:
         self._dbusservice.add_path('/System/HasTemperature', 1)
         self._dbusservice.add_path('/System/NrOfBatteries', 10)
         self._dbusservice.add_path('/System/NrOfModulesOnline', 10)
+	self._dbusservice.add_path('/System/NrOfModulesOffline', 0)
+	self._dbusservice.add_path('/System/NrOfModulesBlockingDischarge', 0)
+	self._dbusservice.add_path('/System/NrOfModulesBlockingCharge', 0)
         self._dbusservice.add_path('/System/NrOfBatteriesBalancing', 0)
         self._dbusservice.add_path('/System/BatteriesParallel', 5)
         self._dbusservice.add_path('/System/BatteriesSeries', 2)
@@ -91,6 +94,7 @@ class DbusBatteryService:
         self._dbusservice.add_path('/System/MaxCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxPcbTemperature', 10.0)
 
+
 	self._summeditems = {
                         '/System/MaxCellVoltage': {'gettext': '%.2F V'},
                         '/System/MinCellVoltage': {'gettext': '%.2F V'},
@@ -98,6 +102,8 @@ class DbusBatteryService:
                         '/Dc/0/Current': {'gettext': '%.1F A'},
                         '/Dc/0/Power': {'gettext': '%.0F W'},
                         '/Soc': {'gettext': '%.0F %%'},
+			'/History/DischargedEnergy': {'gettext': '%.2F kWh'},
+			'/History/ChargedEnergy': {'gettext': '%.2F kWh'},
                         '/TimeToGo': {'gettext': '%.0F s'}
 #                        '/ConsumedAmphours': {'gettext': '%.1F Ah'}
         }
@@ -120,13 +126,13 @@ class DbusBatteryService:
 
 	self._dbusservice.add_path('/History/AverageDischarge', self._settings['AvgDischarge'])
         self._dbusservice.add_path('/History/TotalAhDrawn', self._settings['TotalAhDrawn'])
-        self._dbusservice.add_path('/History/DischargedEnergy', 0.0)
-        self._dbusservice.add_path('/History/ChargedEnergy', 0.0)
 	self._dbusservice.add_path('/History/MinCellVoltage', self._settings['MinCellVoltage'])
         self._dbusservice.add_path('/History/MaxCellVoltage', self._settings['MaxCellVoltage'])
 	logging.info("History cell voltage min: %.3f, max: %.3f, totalAhDrawn: %d",  
 		self._settings['MinCellVoltage'], self._settings['MaxCellVoltage'], self._settings['TotalAhDrawn'])
 
+      	self._dbusservice['/History/ChargedEnergy'] = 0
+       	self._dbusservice['/History/DischargedEnergy'] = 0
 
         gobject.timeout_add( self._settings['interval'], exit_on_error, self._update)
 
@@ -238,10 +244,12 @@ class DbusBatteryService:
         self._dbusservice['/Info/MaxChargeCurrent'] = self._bat.maxChargeCurrent
         self._dbusservice['/Info/MaxDischargeCurrent'] = self._bat.maxDischargeCurrent
         self._dbusservice['/Info/MaxChargeVoltage'] = self._bat.maxChargeVoltage
-        self._dbusservice['/System/NrOfModulesOnline'] =  self._bat.numberOfModules
+        self._dbusservice['/System/NrOfModulesOnline'] =  self._bat.numberOfModulesCommunicating
+        self._dbusservice['/System/NrOfModulesOffline'] =  self._bat.numberOfModules - self._bat.numberOfModulesCommunicating
         self._dbusservice['/System/NrOfBatteriesBalancing'] = self._bat.numberOfModulesBalancing
-	
-	if self._bat.current > 0  and datetime.now().day != self.dailyResetDone : #on first occurence of a positive bat current 
+
+	#update energy statistics daily at 6:00, 	
+	if datetime.now().hour == 6 and datetime.now().minute == 0 and datetime.now().day != self.dailyResetDone :  
 		self._daily_stats()
 
 	now = datetime.now().time()
