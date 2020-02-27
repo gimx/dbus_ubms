@@ -125,6 +125,7 @@ class DbusBatteryService:
     		eventCallback=handle_changed_setting)
 
 	self._dbusservice.add_path('/History/AverageDischarge', self._settings['AvgDischarge'])
+	self._dbusservice.add_path('/History/TimeSinceLastFullCharge', 0)
         self._dbusservice.add_path('/History/TotalAhDrawn', self._settings['TotalAhDrawn'])
 	self._dbusservice.add_path('/History/MinCellVoltage', self._settings['MinCellVoltage'])
         self._dbusservice.add_path('/History/MaxCellVoltage', self._settings['MaxCellVoltage'])
@@ -207,13 +208,16 @@ class DbusBatteryService:
         self._dbusservice['/Alarms/LowTemperature'] = (self._bat.mode & 0x60)>>5 
 
         self._dbusservice['/Soc'] = self._bat.soc 
+	dt = datetime.now() - datetime.fromtimestamp( float(self._settings['TimeLastFull']) )
+	self._dbusservice['/History/TimeSinceLastFullCharge'] = dt.seconds
+
 	if self._bat.soc == 100 or self._bat.chargeComplete :  
 		if datetime.fromtimestamp(time()).day != datetime.fromtimestamp(float(self._settings['TimeLastFull'])).day: 
 			logging.info("Fully charged, SOC(min/max/avg): %d/%d/%d, Discharged: %.2f, Charged: %.2f ",min(self._bat.moduleSoc), max(self._bat.moduleSoc), self._bat.soc,  self._dbusservice['/History/DischargedEnergy'],  self._dbusservice['/History/ChargedEnergy'])  
 			self._settings['TimeLastFull'] = time() 
 
-        self._dbusservice['/Status'] = (self._bat.mode &0xC)
-        self._dbusservice['/Mode'] = (self._bat.mode &0x3)
+        self._dbusservice['/Status'] = self._bat.opModes[self._bat.mode]
+#        self._dbusservice['/Mode'] = (self._bat.mode &0x3)
         self._dbusservice['/Balancing'] = (self._bat.mode &0x10)>>4
         self._dbusservice['/Dc/0/Current'] = self._bat.current
         self._dbusservice['/Dc/0/Voltage'] = self._bat.voltage
