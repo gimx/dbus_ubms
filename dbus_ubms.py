@@ -209,15 +209,15 @@ class DbusBatteryService:
 
         self._dbusservice['/Soc'] = self._bat.soc 
 	dt = datetime.now() - datetime.fromtimestamp( float(self._settings['TimeLastFull']) )
-	self._dbusservice['/History/TimeSinceLastFullCharge'] = dt.seconds
+	self._dbusservice['/History/TimeSinceLastFullCharge'] = dt.total_seconds()
 
 	if self._bat.soc == 100 or self._bat.chargeComplete :  
 		if datetime.fromtimestamp(time()).day != datetime.fromtimestamp(float(self._settings['TimeLastFull'])).day: 
 			logging.info("Fully charged, SOC(min/max/avg): %d/%d/%d, Discharged: %.2f, Charged: %.2f ",min(self._bat.moduleSoc), max(self._bat.moduleSoc), self._bat.soc,  self._dbusservice['/History/DischargedEnergy'],  self._dbusservice['/History/ChargedEnergy'])  
 			self._settings['TimeLastFull'] = time() 
 
-        self._dbusservice['/Status'] = self._bat.opModes[self._bat.mode]
-#        self._dbusservice['/Mode'] = (self._bat.mode &0x3)
+        self._dbusservice['/Status'] = self._bat.mode & 0xC #self._bat.opState[self._bat.mode & 0xC]
+        self._dbusservice['/Mode'] = self._bat.opModes[self._bat.mode & 0x3] 
         self._dbusservice['/Balancing'] = (self._bat.mode &0x10)>>4
         self._dbusservice['/Dc/0/Current'] = self._bat.current
         self._dbusservice['/Dc/0/Voltage'] = self._bat.voltage
