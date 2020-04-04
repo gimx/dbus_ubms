@@ -56,7 +56,7 @@ class DbusBatteryService:
         self._dbusservice.add_path('/ProductName', productname)
         self._dbusservice.add_path('/FirmwareVersion', 'unknown')
         self._dbusservice.add_path('/HardwareVersion', 'unknown')
-        self._dbusservice.add_path('/Connected', 1)
+        self._dbusservice.add_path('/Connected', 0)
         # Create battery specific objects
         self._dbusservice.add_path('/Status', 0)
 	self._dbusservice.add_path('/Mode', 1, writeable=True, onchangecallback=self._transmit_mode) 
@@ -137,7 +137,6 @@ class DbusBatteryService:
 
         gobject.timeout_add( self._settings['interval'], exit_on_error, self._update)
 
-
     def _gettext(self, path, value):
 	item = self._summeditems.get(path)
 	if item is not None:
@@ -168,11 +167,21 @@ class DbusBatteryService:
         self._dbusservice['/History/AverageDischarge'] = (6*self._dbusservice['/History/AverageDischarge'] + self._dbusservice['/History/DischargedEnergy'])/7 #rolling week
       	self._dbusservice['/History/ChargedEnergy'] = 0
        	self._dbusservice['/History/DischargedEnergy'] = 0
+	dt = datetime.now() - datetime.fromtimestamp( float(self._settings['TimeLastFull']) )                                                                                                                             
+	#if full within the last 24h and more than 50% consumed, estimate actual capacity and SOH based on consumed amphours from full and SOC reported
+	if dt.total_seconds() < 24*3600 and self._bat.soc > 50:
+		self._dbusservice['/Capacity'] = self._dbusservice['/ConsumedAmphours'] / (100-self._bat.soc)		
+		self._dbusservice['/Soh'] = self._dbusservice['/Capacity'] / self._dbusservice['InstalledCapacity'] * 100
         self._dbusservice['/ConsumedAmphours'] = 0
         self.dailyResetDone = datetime.now().day 
 
 
     def _update(self):
+	if self._bat.updated != -1 :
+		self._dbusservice['/Connected'] = 1 
+	else:
+		self._dbusservice['/Connected'] = 0
+
 #	self._dbusservice['/Alarms/CellImbalance'] = (self._bat.internalErrors & 0x20)>>5
 	deltaCellVoltage = self._bat.maxCellVoltage - self._bat.minCellVoltage
 
@@ -183,7 +192,7 @@ class DbusBatteryService:
 			logging.error("Cell voltage imbalance: %.2fV, SOC: %d, @Module: %d ", deltaCellVoltage, self._bat.soc, self.moduleSoc.index(min(self.moduleSoc)))
 		        logging.info("SOC: %d ",self._bat.soc )
 		self._bat.balanced = False
-	elif (deltaCellVoltage > 0.18):
+	elif (deltaCellVoltage >= 0.20):
 		# warn only if not already balancing (UBMS threshold is 0.15V) 
 		if self._bat.numberOfModulesBalancing == 0 :
 			self._dbusservice['/Alarms/CellImbalance'] = 1
@@ -208,12 +217,12 @@ class DbusBatteryService:
         self._dbusservice['/Alarms/LowTemperature'] = (self._bat.mode & 0x60)>>5 
 
         self._dbusservice['/Soc'] = self._bat.soc 
-	dt = datetime.now() - datetime.fromtimestamp( float(self._settings['TimeLastFull']) )
-	self._dbusservice['/History/TimeSinceLastFullCharge'] = dt.total_seconds()
+#	dt = datetime.now() - datetime.fromtimestamp( float(self._settings['TimeLastFull']) )
+#	self._dbusservice['/History/TimeSinceLastFullCharge'] = dt.total_seconds()
 
 	if self._bat.soc == 100 or self._bat.chargeComplete :  
 		if datetime.fromtimestamp(time()).day != datetime.fromtimestamp(float(self._settings['TimeLastFull'])).day: 
-			logging.info("Fully charged, SOC(min/max/avg): %d/%d/%d, Discharged: %.2f, Charged: %.2f ",min(self._bat.moduleSoc), max(self._bat.moduleSoc), self._bat.soc,  self._dbusservice['/History/DischargedEnergy'],  self._dbusservice['/History/ChargedEnergy'])  
+			logging.info("Fully charged, Discharged: %.2f, Charged: %.2f ", self._dbusservice['/History/DischargedEnergy'],  self._dbusservice['/History/ChargedEnergy'])  
 			self._settings['TimeLastFull'] = time() 
 
         self._dbusservice['/Status'] = self._bat.mode & 0xC #self._bat.opState[self._bat.mode & 0xC]
@@ -224,6 +233,11 @@ class DbusBatteryService:
         power = self._bat.voltage * self._bat.current
         self._dbusservice['/Dc/0/Power'] = power 
         self._dbusservice['/Dc/0/Temperature'] = self._bat.maxCellTemperature
+
+	#only update the below every 10s to reduce load
+#	if datetime.now().second not in [0, 20, 40]:
+#		return True
+
 	chain = itertools.chain(*self._bat.cellVoltages)
 	flatVList = list(chain)
 	index = flatVList.index(max(flatVList))	
@@ -264,19 +278,19 @@ class DbusBatteryService:
 	      	#calculate time to full
 		self._dbusservice['/TimeToGo'] = (100 - self._bat.soc)*self._bat.capacity * 36 / self._bat.current 
                 self._dbusservice['/History/ChargedEnergy'] += power * 1.666667e-5 #kWh
-            else:
+            elif self._bat.current < 0 :
 		#discharging
 		self._dbusservice['/ConsumedAmphours'] += self._bat.current * 0.016667 #Ah
 		self._dbusservice['/History/TotalAhDrawn'] += self._bat.current * 0.016667 #Ah
                 self._dbusservice['/History/DischargedEnergy'] += power * 1.666667e-5 #kWh
-		#calculate time to empty/full
-		try:
-			self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36/(-self._bat.current)
-		except:
-		      	self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36
+		#calculate time to empty
+		self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36/(-self._bat.current)
+	    else:
+		self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36
 
 	    self._safe_history()
 
+	self._bat.updated = -1
         return True
 
 
@@ -310,8 +324,8 @@ def main():
 	args.capacity = 130 
 
     if not args.voltage:
-        logging.warning('Maximum charge voltage not specified, using default 14.5V')
-	args.voltage = 14.5
+        logging.error('Maximum charge voltage not specified. Exiting.')
+	return	
 	
     logging.info('Starting dbus_ubms %s on %s ' %
              (VERSION, args.interface))
