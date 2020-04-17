@@ -144,7 +144,6 @@ class DbusBatteryService:
 	return str(value)
 
     def _transmit_mode(self, path, value):
-	logging.info('Changing mode to %d', value)
 	self._bat.set_mode(value)
 
 
@@ -169,10 +168,9 @@ class DbusBatteryService:
        	self._dbusservice['/History/DischargedEnergy'] = 0
 	dt = datetime.now() - datetime.fromtimestamp( float(self._settings['TimeLastFull']) )                                                                                                                             
 	#if full within the last 24h and more than 50% consumed, estimate actual capacity and SOH based on consumed amphours from full and SOC reported
-	if dt.total_seconds() < 24*3600 and self._bat.soc > 50:
-		self._dbusservice['/Capacity'] = self._dbusservice['/ConsumedAmphours'] / (100-self._bat.soc)		
-		self._dbusservice['/Soh'] = self._dbusservice['/Capacity'] / self._dbusservice['InstalledCapacity'] * 100
-        self._dbusservice['/ConsumedAmphours'] = 0
+	if dt.total_seconds() < 24*3600 and self._bat.soc < 50:
+		self._dbusservice['/Capacity'] = int(-self._dbusservice['/ConsumedAmphours'] * 100 / (100-self._bat.soc))		
+		self._dbusservice['/Soh'] = int(self._dbusservice['/Capacity']*100 / self._dbusservice['/InstalledCapacity'])
         self.dailyResetDone = datetime.now().day 
 
 
@@ -192,7 +190,7 @@ class DbusBatteryService:
 			logging.error("Cell voltage imbalance: %.2fV, SOC: %d, @Module: %d ", deltaCellVoltage, self._bat.soc, self.moduleSoc.index(min(self.moduleSoc)))
 		        logging.info("SOC: %d ",self._bat.soc )
 		self._bat.balanced = False
-	elif (deltaCellVoltage >= 0.20):
+	elif (deltaCellVoltage >= 0.18):
 		# warn only if not already balancing (UBMS threshold is 0.15V) 
 		if self._bat.numberOfModulesBalancing == 0 :
 			self._dbusservice['/Alarms/CellImbalance'] = 1
@@ -221,7 +219,10 @@ class DbusBatteryService:
 #	self._dbusservice['/History/TimeSinceLastFullCharge'] = dt.total_seconds()
 
 	if self._bat.soc == 100 or self._bat.chargeComplete :  
+		#reset used Amphours to zero
+		self._dbusservice['/ConsumedAmphours'] = 0
 		if datetime.fromtimestamp(time()).day != datetime.fromtimestamp(float(self._settings['TimeLastFull'])).day: 
+		#and if it is the first time that day also create log entry
 			logging.info("Fully charged, Discharged: %.2f, Charged: %.2f ", self._dbusservice['/History/DischargedEnergy'],  self._dbusservice['/History/ChargedEnergy'])  
 			self._settings['TimeLastFull'] = time() 
 
@@ -275,18 +276,20 @@ class DbusBatteryService:
 	    self.minUpdateDone = now.minute	
 	    if self._bat.current > 0:
 		#charging 
+                self._dbusservice['/History/ChargedEnergy'] += power * 1.666667e-5 #kWh
 	      	#calculate time to full
 		self._dbusservice['/TimeToGo'] = (100 - self._bat.soc)*self._bat.capacity * 36 / self._bat.current 
-                self._dbusservice['/History/ChargedEnergy'] += power * 1.666667e-5 #kWh
-            elif self._bat.current < 0 :
+            else :
 		#discharging
 		self._dbusservice['/ConsumedAmphours'] += self._bat.current * 0.016667 #Ah
 		self._dbusservice['/History/TotalAhDrawn'] += self._bat.current * 0.016667 #Ah
                 self._dbusservice['/History/DischargedEnergy'] += power * 1.666667e-5 #kWh
+	   
 		#calculate time to empty
-		self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36/(-self._bat.current)
-	    else:
-		self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36
+		try:
+			self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36/(-self._bat.current)
+		except:
+		      	self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36
 
 	    self._safe_history()
 
