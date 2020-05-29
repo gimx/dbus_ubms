@@ -63,7 +63,6 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Soh', 100)
         self._dbusservice.add_path('/Capacity', int(capacity))
         self._dbusservice.add_path('/InstalledCapacity', int(capacity))
-        self._dbusservice.add_path('/ConsumedAmphours', 0)
         self._dbusservice.add_path('/Dc/0/Temperature', 25)
         self._dbusservice.add_path('/Info/MaxChargeCurrent', 70)
         self._dbusservice.add_path('/Info/MaxDischargeCurrent', 150)
@@ -94,24 +93,6 @@ class DbusBatteryService:
         self._dbusservice.add_path('/System/MaxCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxPcbTemperature', 10.0)
 
-
-	self._summeditems = {
-                        '/System/MaxCellVoltage': {'gettext': '%.2F V'},
-                        '/System/MinCellVoltage': {'gettext': '%.2F V'},
-                        '/Dc/0/Voltage': {'gettext': '%.2F V'},
-                        '/Dc/0/Current': {'gettext': '%.1F A'},
-                        '/Dc/0/Power': {'gettext': '%.0F W'},
-                        '/Soc': {'gettext': '%.0F %%'},
-			'/History/DischargedEnergy': {'gettext': '%.2F kWh'},
-			'/History/ChargedEnergy': {'gettext': '%.2F kWh'},
-                        '/TimeToGo': {'gettext': '%.0F s'}
-#                        '/ConsumedAmphours': {'gettext': '%.1F Ah'}
-        }
-        for path in self._summeditems.keys():
-                        self._dbusservice.add_path(path, value=None, gettextcallback=self._gettext)
-
-
-
 	self._settings = SettingsDevice(
     		bus=dbus.SystemBus() if (platform.machine() == 'armv7l') else dbus.SessionBus(),
     		supportedSettings={
@@ -124,11 +105,32 @@ class DbusBatteryService:
         	},
     		eventCallback=handle_changed_setting)
 
-	self._dbusservice.add_path('/History/AverageDischarge', self._settings['AvgDischarge'])
-	self._dbusservice.add_path('/History/TimeSinceLastFullCharge', 0)
-        self._dbusservice.add_path('/History/TotalAhDrawn', self._settings['TotalAhDrawn'])
-	self._dbusservice.add_path('/History/MinCellVoltage', self._settings['MinCellVoltage'])
+
+        self._summeditems = {
+                        '/System/MaxCellVoltage': {'gettext': '%.2F V'},
+                        '/System/MinCellVoltage': {'gettext': '%.2F V'},
+                        '/Dc/0/Voltage': {'gettext': '%.2F V'},
+                        '/Dc/0/Current': {'gettext': '%.1F A'},
+                        '/Dc/0/Power': {'gettext': '%.0F W'},
+                        '/Soc': {'gettext': '%.0F %%'},
+                        '/History/TotalAhDrawn': {'gettext': '%.0F Ah'},
+                        '/History/DischargedEnergy': {'gettext': '%.2F kWh'},
+                        '/History/ChargedEnergy': {'gettext': '%.2F kWh'},
+                        '/History/AverageDischarge': {'gettext': '%.2F kWh'},
+                        '/TimeToGo': {'gettext': '%.0F s'},
+                        '/ConsumedAmphours': {'gettext': '%.1F Ah'}
+        }
+        for path in self._summeditems.keys():
+                        self._dbusservice.add_path(path, value=None, gettextcallback=self._gettext)
+
+        self._dbusservice['/History/AverageDischarge'] = self._settings['AvgDischarge']
+        self._dbusservice['/History/TotalAhDrawn'] = self._settings['TotalAhDrawn']
+        self._dbusservice.add_path('/History/TimeSinceLastFullCharge', 0)
+        self._dbusservice.add_path('/History/MinCellVoltage', self._settings['MinCellVoltage'])
         self._dbusservice.add_path('/History/MaxCellVoltage', self._settings['MaxCellVoltage'])
+        self._dbusservice['/ConsumedAmphours'] = 0
+
+
 	logging.info("History cell voltage min: %.3f, max: %.3f, totalAhDrawn: %d",  
 		self._settings['MinCellVoltage'], self._settings['MaxCellVoltage'], self._settings['TotalAhDrawn'])
 
@@ -167,10 +169,11 @@ class DbusBatteryService:
       	self._dbusservice['/History/ChargedEnergy'] = 0
        	self._dbusservice['/History/DischargedEnergy'] = 0
 	dt = datetime.now() - datetime.fromtimestamp( float(self._settings['TimeLastFull']) )                                                                                                                             
-	#if full within the last 24h and more than 50% consumed, estimate actual capacity and SOH based on consumed amphours from full and SOC reported
-	if dt.total_seconds() < 24*3600 and self._bat.soc < 50:
+	#if full within the last 24h and more than *0% consumed, estimate actual capacity and SOH based on consumed amphours from full and SOC reported
+	if dt.total_seconds() < 24*3600 and self._bat.soc < 70:
 		self._dbusservice['/Capacity'] = int(-self._dbusservice['/ConsumedAmphours'] * 100 / (100-self._bat.soc))		
 		self._dbusservice['/Soh'] = int(self._dbusservice['/Capacity']*100 / self._dbusservice['/InstalledCapacity'])
+        	logging.info("SOH: %d, Capacity: %d ", self._dbusservice['/Soh'],  self._dbusservice['/Capacity'])
         self.dailyResetDone = datetime.now().day 
 
 
@@ -215,8 +218,8 @@ class DbusBatteryService:
         self._dbusservice['/Alarms/LowTemperature'] = (self._bat.mode & 0x60)>>5 
 
         self._dbusservice['/Soc'] = self._bat.soc 
-#	dt = datetime.now() - datetime.fromtimestamp( float(self._settings['TimeLastFull']) )
-#	self._dbusservice['/History/TimeSinceLastFullCharge'] = dt.total_seconds()
+	dt = datetime.now() - datetime.fromtimestamp( float(self._settings['TimeLastFull']) )
+	self._dbusservice['/History/TimeSinceLastFullCharge'] = (dt.seconds + dt.days * 24 * 3600) 
 
 	if self._bat.soc == 100 or self._bat.chargeComplete :  
 		#reset used Amphours to zero
@@ -277,8 +280,12 @@ class DbusBatteryService:
 	    if self._bat.current > 0:
 		#charging 
                 self._dbusservice['/History/ChargedEnergy'] += power * 1.666667e-5 #kWh
-	      	#calculate time to full
-		self._dbusservice['/TimeToGo'] = (100 - self._bat.soc)*self._bat.capacity * 36 / self._bat.current 
+	      	#calculate time to full, in the absense of a mutex accessing bat.current value might have changed 
+		#to 0 after check above, so try to catch a div0 
+		try:
+			self._dbusservice['/TimeToGo'] = (100 - self._bat.soc)*self._bat.capacity * 36 / self._bat.current 
+		except:
+			self._dbusservice['/TimeToGo'] = self._bat.soc*self._bat.capacity*36
             else :
 		#discharging
 		self._dbusservice['/ConsumedAmphours'] += self._bat.current * 0.016667 #Ah
