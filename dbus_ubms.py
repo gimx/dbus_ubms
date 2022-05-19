@@ -38,7 +38,7 @@ class DbusBatteryService:
     def __init__(self, servicename, deviceinstance, voltage, capacity, productname='Valence U-BMS', connection='can0'):
 	self.minUpdateDone = 0
 	self.dailyResetDone = 0
-
+	self.lastUpdated = 0
 	self._bat = UbmsBattery(capacity=capacity, voltage=voltage, connection=connection)        
 
         self._dbusservice = VeDbusService(servicename+'.socketcan_'+connection+'_di'+str(deviceinstance))
@@ -99,8 +99,8 @@ class DbusBatteryService:
                 	'AvgDischarge': ['/Settings/Ubms/AvgerageDischarge', 0.0,0,0], 
                 	'TotalAhDrawn': ['/Settings/Ubms/TotalAhDrawn', 0.0,0,0],
                 	'TimeLastFull': ['/Settings/Ubms/TimeLastFull', 0.0 ,0,0],
-                	'MinCellVoltage': ['/Settings/Ubms/MinCellVoltage', 4.0,2.0,4.0],
-                	'MaxCellVoltage': ['/Settings/Ubms/MaxCellVoltage', 2.0,2.0,4.0],
+                	'MinCellVoltage': ['/Settings/Ubms/MinCellVoltage', 4.0,2.0,4.2],
+                	'MaxCellVoltage': ['/Settings/Ubms/MaxCellVoltage', 2.0,2.0,4.2],
 			'interval': ['/Settings/Ubms/Interval', 50, 50, 200]
         	},
     		eventCallback=handle_changed_setting)
@@ -159,7 +159,7 @@ class DbusBatteryService:
 	self._settings['AvgDischarge'] = self._dbusservice['/History/AverageDischarge']
 	self._settings['TotalAhDrawn'] = self._dbusservice['/History/TotalAhDrawn']
 	self._settings['MinCellVoltage'] = self._dbusservice['/History/MinCellVoltage']
-	self._settings['MaxCellVoltage'] = self._dbusservice['/History/MaxCellVoltage']
+	#self._settings['MaxCellVoltage'] = self._dbusservice['/History/MaxCellVoltage']
 
 
     def _daily_stats(self):
@@ -178,7 +178,8 @@ class DbusBatteryService:
 
 
     def _update(self):
-	if self._bat.updated != -1 :
+	if (self._bat.updated != -1 and  self.lastUpdated == 0) or  ((self._bat.updated - self.lastUpdated) < 1000):
+		self.lastUpdated = self._bat.updated
 		self._dbusservice['/Connected'] = 1 
 	else:
 		self._dbusservice['/Connected'] = 0
@@ -190,7 +191,8 @@ class DbusBatteryService:
 	if (deltaCellVoltage > 0.25) :
 		self._dbusservice['/Alarms/CellImbalance'] = 2
 		if self._bat.balanced: 
-			logging.error("Cell voltage imbalance: %.2fV, SOC: %d, @Module: %d ", deltaCellVoltage, self._bat.soc, self.moduleSoc.index(min(self.moduleSoc)))
+#			logging.error("Cell voltage imbalance: %.2fV, SOC: %d, @Module: %d ", deltaCellVoltage, self._bat.soc, self._bat.moduleSoc.index(min(self.moduleSoc)))
+			logging.error("Cell voltage imbalance: %.2fV, SOC: %d ", deltaCellVoltage, self._bat.soc)
 		        logging.info("SOC: %d ",self._bat.soc )
 		self._bat.balanced = False
 	elif (deltaCellVoltage >= 0.18):
@@ -300,7 +302,6 @@ class DbusBatteryService:
 
 	    self._safe_history()
 
-	self._bat.updated = -1
         return True
 
 
