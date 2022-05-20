@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """
 Data acquisition and decoding of Valence U-BMS messages on CAN bus 
@@ -16,7 +16,7 @@ import can
 import struct
 from argparse import ArgumentParser
 
-VERSION = '0.8'
+VERSION = '0.9'
 
 class UbmsBattery(can.Listener):
     opModes = {
@@ -56,7 +56,7 @@ class UbmsBattery(can.Listener):
 	self.maxCellVoltage = 3.2
 	self.minCellVoltage = 3.2
         self.maxChargeCurrent = self.capacity * 0.25
-	self.maxDischargeCurrent = self.capacity * 0.5
+	self.maxDischargeCurrent = self.capacity * 0.4
 	self.partnr = 0 
 	self.firmwareVersion = 'unknown'
 	self.numberOfModulesBalancing = 0
@@ -105,11 +105,12 @@ class UbmsBattery(can.Listener):
         
 
     def on_message_received(self, msg):
+	self.updated = msg.timestamp
 	if msg.arbitration_id == 0xc0:
-		self.updated = msg.timestamp
 		self.soc = msg.data[0]
 		self.mode = msg.data[1]
 		self.state = self.opState[self.mode & 0xc]
+		self.firmwareVersion = self.state #FIXME where to put state such that it is visible in GUI
 		self.voltageAndCellTAlarms = msg.data[2]
 		self.internalErrors = msg.data[3]
 		self.currentAndPcbTAlarms = msg.data[4]
@@ -127,8 +128,8 @@ class UbmsBattery(can.Listener):
                 self.current = struct.unpack('b',chr(msg.data[1]))[0]
 
 		if (self.mode & 0x2) != 0 : #provided in drive mode only
-			self.maxDischargeCurrent =  struct.unpack('<h', msg.data[3:5])[0]
-			self.maxChargeCurrent =  struct.unpack('<h', chr(msg.data[5])+chr(msg.data[7]))[0]
+			self.maxDischargeCurrent =  (struct.unpack('<h', msg.data[3:5])[0])/10
+			self.maxChargeCurrent =  (struct.unpack('<h', chr(msg.data[5])+chr(msg.data[7]))[0])/10
 			logging.debug("Icmax %dA Idmax %dA", self.maxChargeCurrent, self.maxDischargeCurrent)
 
 		logging.debug("I: %dA U: %dV",self.current, self.voltage)
@@ -143,8 +144,8 @@ class UbmsBattery(can.Listener):
 			if (self.mode & 0x18) == 0x18 : 
                 		self.maxChargeCurrent = msg.data[0]
 			else:
-			#allow charge with 0.5C
-				self.maxChargeCurrent = self.capacity * 0.5 
+			#allow charge with 0.1C
+				self.maxChargeCurrent = self.capacity * 0.1 
 			
 
 	elif msg.arbitration_id == 0xc4:
@@ -226,7 +227,7 @@ def main():
 	
 #    	logger = can.Logger('logfile.asc')
 
-	bat = UbmsBattery(capacity=650, voltage=29.2, connection='can0') 
+	bat = UbmsBattery(capacity=650, voltage=29.0, connection='can0') 
 
 	listeners = [
 	#        	logger,          # Regular Listener object
