@@ -1,11 +1,11 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """
 A class to put a battery service on the dbus, according to victron standards, with constantly updating
 paths.
 
 """
-import gobject
+from gi.repository import GLib
 import platform
 import argparse
 import logging
@@ -42,8 +42,8 @@ class DbusBatteryService:
         self._bat = UbmsBattery(capacity=capacity, voltage=voltage, connection=connection)
 
         self._dbusservice = VeDbusService(servicename+'.socketcan_'+connection+'_di'+str(deviceinstance))
-
         logging.debug("%s /DeviceInstance = %d" % (servicename+'.socketcan_'+connection+'_di'+str(deviceinstance), deviceinstance))
+
 
         # Create the management objects, as specified in the ccgx dbus-api document
         self._dbusservice.add_path('/Mgmt/ProcessName', __file__)
@@ -137,7 +137,7 @@ class DbusBatteryService:
         self._dbusservice['/History/ChargedEnergy'] = 0
         self._dbusservice['/History/DischargedEnergy'] = 0
 
-        gobject.timeout_add( self._settings['interval'], exit_on_error, self._update)
+        GLib.timeout_add( self._settings['interval'], exit_on_error, self._update)
 
     def _gettext(self, path, value):
         item = self._summeditems.get(path)
@@ -353,8 +353,8 @@ def main():
         voltage = float(args.voltage)
         )
 
-    logging.debug('Connected to dbus, and switching over to gobject.MainLoop() (= event based)')
-    mainloop = gobject.MainLoop()
+    logging.debug('Connected to dbus, and switching over to GLib.MainLoop() (= event based)')
+    mainloop = GLib.MainLoop()
     mainloop.run()
 
 
