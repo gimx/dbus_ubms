@@ -26,15 +26,16 @@ or download the above projects as archives, copy and unzip to root home
 
 ## Run from command line
 ```
- python dbus_ubms.py -i can0
+ python dbus_ubms.py -i can0 -v 29.0 -c 650
  or
- nohup python dbus_ubms.py -i can0 &
+ nohup python dbus_ubms.py -i can0 -v 29.0 -c 650 &
 ```
 
 ## Run as a service: 
 ```
  ln -s /home/root/dbus_ubms/service /service/dbus-ubms.can0
  cp rc.local /data/rc.local
+ svc -u /service/dbus-ubms.can0
 ```
 
 ## Configuration of U-BMS
