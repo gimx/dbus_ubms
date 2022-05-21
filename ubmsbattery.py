@@ -60,7 +60,9 @@ class UbmsBattery(can.Listener):
         self.partnr = 0
         self.firmwareVersion = 'unknown'
         self.numberOfModulesBalancing = 0
+        self.numberOfModulesCommunicating = 0
         self.updated = -1
+        self.cyclicModeTask = None
 
         self._ci = can.interface.Bus(channel=connection, bustype='socketcan',
                    can_filters=[{"can_id": 0x0cf, "can_mask": 0xff0},
@@ -72,6 +74,8 @@ class UbmsBattery(can.Listener):
 
         # check connection and that reported system voltage roughly matches configuration
         found = False
+        msg = None
+
         while True:
             try:
                 msg = self._ci.recv(timeout=10)
@@ -98,8 +102,8 @@ class UbmsBattery(can.Listener):
         # a U-BMS in slave mode according to manual section 6.4.1 switches to standby
         # after 20 seconds of not receiving it
             msg = can.Message(arbitration_id=0x440,
-                  data=[0, 2, 0, 0], #default: drive mode
-                  extended_id=False)
+                  data=[0, 2, 0, 0]) #default: drive mode
+            
             self.cyclicModeTask = self._ci.send_periodic(msg, 1)
             notifier = can.Notifier(self._ci, [self])
 
@@ -125,11 +129,11 @@ class UbmsBattery(can.Listener):
 
         elif msg.arbitration_id == 0xc1:
 #                self.voltage = msg.data[0] * 1 # voltage scale factor depends on BMS configuration!
-            self.current = struct.unpack('b',chr(msg.data[1]))[0]
+            self.current = struct.unpack('Bb',msg.data[0:2])[1]
 
             if (self.mode & 0x2) != 0 : #provided in drive mode only
                 self.maxDischargeCurrent =  (struct.unpack('<h', msg.data[3:5])[0])/10
-                self.maxChargeCurrent =  (struct.unpack('<h', chr(msg.data[5])+chr(msg.data[7]))[0])/10
+                self.maxChargeCurrent =  (struct.unpack('<h', bytearray([msg.data[5],msg.data[7]]))[0])/10
                 logging.debug("Icmax %dA Idmax %dA", self.maxChargeCurrent, self.maxDischargeCurrent)
 
             logging.debug("I: %dA U: %dV",self.current, self.voltage)
@@ -172,8 +176,8 @@ class UbmsBattery(can.Listener):
 
         elif msg.arbitration_id in [0x46a, 0x46b, 0x46c, 0x46d]:
             iStart = (msg.arbitration_id - 0x46a) * 3
-            fmt = '>' +'h' * ((msg.dlc - 2)/2)
-            mCurrent = struct.unpack(fmt, ''.join(chr(i) for i in msg.data[2:msg.dlc]))
+            fmt = '>' +'h' * int((msg.dlc - 2)/2)
+            mCurrent = struct.unpack(fmt, msg.data[2:msg.dlc])
             self.moduleCurrent[iStart:] = mCurrent
             logging.debug("mCurrents ", self.moduleCurrent)
 
