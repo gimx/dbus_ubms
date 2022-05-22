@@ -102,7 +102,7 @@ class UbmsBattery(can.Listener):
         # a U-BMS in slave mode according to manual section 6.4.1 switches to standby
         # after 20 seconds of not receiving it
             msg = can.Message(arbitration_id=0x440,
-                  data=[0, 2, 0, 0]) #default: drive mode
+                  data=[0, 2, 0, 0], is_extended_id=False) #default: drive mode
             
             self.cyclicModeTask = self._ci.send_periodic(msg, 1)
             notifier = can.Notifier(self._ci, [self])
@@ -179,13 +179,14 @@ class UbmsBattery(can.Listener):
             fmt = '>' +'h' * int((msg.dlc - 2)/2)
             mCurrent = struct.unpack(fmt, msg.data[2:msg.dlc])
             self.moduleCurrent[iStart:] = mCurrent
-            logging.debug("mCurrents ", self.moduleCurrent)
+            logging.debug("Imodule ", self.moduleCurrent)
 
         elif msg.arbitration_id in [0x6a, 0x6b]:
             iStart = (msg.arbitration_id - 0x6a) * 7
             fmt = 'B' * (msg.dlc - 1)
             mSoc = struct.unpack(fmt, msg.data[1:msg.dlc])
             self.moduleSoc[iStart:] = tuple((m * 100)>>8 for m in mSoc)
+            logging.debug("SOCmodule ", self.moduleSoc)
 
     def prnt(self):
         print(self.mode)
