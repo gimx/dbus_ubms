@@ -132,8 +132,8 @@ class UbmsBattery(can.Listener):
             self.current = struct.unpack('Bb',msg.data[0:2])[1]
 
             if (self.mode & 0x2) != 0 : #provided in drive mode only
-                self.maxDischargeCurrent =  (struct.unpack('<h', msg.data[3:5])[0])/10
-                self.maxChargeCurrent =  (struct.unpack('<h', bytearray([msg.data[5],msg.data[7]]))[0])/10
+                self.maxDischargeCurrent =  int((struct.unpack('<h', msg.data[3:5])[0])/10)
+                self.maxChargeCurrent =  int((struct.unpack('<h', bytearray([msg.data[5],msg.data[7]]))[0])/10)
                 logging.debug("Icmax %dA Idmax %dA", self.maxChargeCurrent, self.maxDischargeCurrent)
 
             logging.debug("I: %dA U: %dV",self.current, self.voltage)
@@ -179,14 +179,14 @@ class UbmsBattery(can.Listener):
             fmt = '>' +'h' * int((msg.dlc - 2)/2)
             mCurrent = struct.unpack(fmt, msg.data[2:msg.dlc])
             self.moduleCurrent[iStart:] = mCurrent
-            logging.debug("Imodule ", self.moduleCurrent)
+            logging.debug("Imodule %s", ",".join(str(x) for x in self.moduleCurrent))
 
         elif msg.arbitration_id in [0x6a, 0x6b]:
             iStart = (msg.arbitration_id - 0x6a) * 7
             fmt = 'B' * (msg.dlc - 1)
             mSoc = struct.unpack(fmt, msg.data[1:msg.dlc])
             self.moduleSoc[iStart:] = tuple((m * 100)>>8 for m in mSoc)
-            logging.debug("SOCmodule ", self.moduleSoc)
+            logging.debug("SOCmodule %s", ",".join(str(x) for x in self.moduleSoc))
 
     def prnt(self):
         print(self.mode)
