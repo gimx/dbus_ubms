@@ -42,9 +42,10 @@ class DbusBatteryService:
         self.lastUpdated = 0
         self._bat = UbmsBattery(capacity=capacity, voltage=voltage, connection=connection)
 
-        self._dbusservice = VeDbusService(servicename+'.socketcan_'+connection+'_di'+str(deviceinstance))
-        logging.debug("%s /DeviceInstance = %d" % (servicename+'.socketcan_'+connection+'_di'+str(deviceinstance), deviceinstance))
-
+        try:
+             self._dbusservice = VeDbusService(servicename+'.socketcan_'+connection+'_di'+str(deviceinstance))
+        except:
+             exit
 
         # Create the management objects, as specified in the ccgx dbus-api document
         self._dbusservice.add_path('/Mgmt/ProcessName', __file__)
