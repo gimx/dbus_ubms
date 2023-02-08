@@ -294,7 +294,7 @@ class DbusBatteryService:
                 #discharging
                 self._dbusservice['/ConsumedAmphours'] += self._bat.current * 0.016667 #Ah
                 self._dbusservice['/History/TotalAhDrawn'] += self._bat.current * 0.016667 #Ah
-                self._dbusservice['/History/DischargedEnergy'] += power * 1.666667e-5 #kWh
+                self._dbusservice['/History/DischargedEnergy'] += -power * 1.666667e-5 #kWh
 
                 #calculate time to empty
                 try:
