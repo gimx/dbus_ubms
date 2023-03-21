@@ -1,4 +1,5 @@
 #!/bin/sh
-ip link set can8 up type can bitrate 250000
+echo "*** starting dbus-ubms ***"
+echo $DEV
 exec 2>&1
-exec softlimit -d 100000000 -s 1000000 -a 100000000 python ../dbus_ubms.py -i can8 -v 58.4 -c 250 
+exec softlimit -d 100000000 -s 1000000 -a 100000000 python ../dbus_ubms.py -i slcan0 -v 58.0 -c 200 
