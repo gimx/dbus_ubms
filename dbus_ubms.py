@@ -60,14 +60,14 @@ class DbusBatteryService:
         self._dbusservice.add_path('/HardwareVersion', 'unknown')
         self._dbusservice.add_path('/Connected', 0)
         # Create battery specific objects
-        self._dbusservice.add_path('/Status', 0)
+        self._dbusservice.add_path('/State', 0)
         self._dbusservice.add_path('/Mode', 1, writeable=True, onchangecallback=self._transmit_mode)
         self._dbusservice.add_path('/Soh', 100)
         self._dbusservice.add_path('/Capacity', int(capacity))
         self._dbusservice.add_path('/InstalledCapacity', int(capacity))
         self._dbusservice.add_path('/Dc/0/Temperature', 25)
-        self._dbusservice.add_path('/Info/MaxChargeCurrent', 70)
-        self._dbusservice.add_path('/Info/MaxDischargeCurrent', 150)
+        self._dbusservice.add_path('/Info/MaxChargeCurrent', 0)
+        self._dbusservice.add_path('/Info/MaxDischargeCurrent', int(capacity/2))
         self._dbusservice.add_path('/Info/MaxChargeVoltage', float(voltage))
         self._dbusservice.add_path('/Info/BatteryLowVoltage', 44.8)
         self._dbusservice.add_path('/Alarms/CellImbalance', 0)
@@ -148,7 +148,8 @@ class DbusBatteryService:
         return str(value)
 
     def _transmit_mode(self, path, value):
-        self._bat.set_mode(value)
+        if self._bat.set_mode(value) == True:
+            self._dbusservice[path] = value
 
 
     def __del__(self):
@@ -233,8 +234,8 @@ class DbusBatteryService:
                 logging.info("Fully charged, Discharged: %.2f, Charged: %.2f ", self._dbusservice['/History/DischargedEnergy'],  self._dbusservice['/History/ChargedEnergy'])
                 self._settings['TimeLastFull'] = time()
 
-        self._dbusservice['/Status'] = self._bat.mode & 0xC #self._bat.opState[self._bat.mode & 0xC]
-        self._dbusservice['/Mode'] = self._bat.opModes[self._bat.mode & 0x3]
+        self._dbusservice['/State'] = self._bat.state
+        self._dbusservice['/Mode'] = self._bat.guiModeKey.get((self._bat.mode & 0x3), 252)
         self._dbusservice['/Balancing'] = (self._bat.mode &0x10)>>4
         self._dbusservice['/Dc/0/Current'] = self._bat.current
         self._dbusservice['/Dc/0/Voltage'] = self._bat.voltage
