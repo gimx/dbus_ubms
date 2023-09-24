@@ -24,17 +24,25 @@ class UbmsBattery(can.Listener):
         1:"Charge",
         2:"Drive"
         }
+
+    guiModeKey = {                                                                                                         
+        252:0,                                                                                                    
+        3:2                                                                                                       
+        }     
+
     opState = {
-        0:"? [0]",
-        0x4:"Equalize",
-        0x8:"Float",
-        0xc:"Equalize & Float"
+        0:0,
+        1:9,
+        2:9
         }
 
     def __init__(self, voltage, capacity, connection):
         self.capacity = capacity
         self.maxChargeVoltage = voltage
-        self.numberOfModules = 10
+        self.numberOfModules = 9 
+        self.numberOfStrings = 3 
+        self.modulesInSeries = int(self.numberOfModules / self.numberOfStrings)
+        self.cellsPerModule = 4
         self.chargeComplete = 0
         self.soc = 0
         self.mode = 0
@@ -73,10 +81,10 @@ class UbmsBattery(can.Listener):
                         ])
 
         # check connection and that reported system voltage roughly matches configuration
-        found = False
+        found = 0 
         msg = None
 
-        while True:
+        while found != 3:
             try:
                 msg = self._ci.recv(timeout=10)
             except can.CanError:
@@ -84,20 +92,25 @@ class UbmsBattery(can.Listener):
 
             if msg == None:
             #timeout no system connected
-                logging.error("No messages on canbus %s received. Check connection and speed." % connection)
+                logging.error("No messages on canbus %s received. Check connection and speed setting." % connection)
                 break;
 
+            elif msg.arbitration_id == 0xc0:
+            # status message received
+                logging.info("Found Valence U-BMS on %s in mode %x with %i modules communicating.", connection, msg.data[1], msg.data[5])
+                if (msg.data[2] & 1 != 0): logging.info("The number of modules communicating is less than configured.")
+                if (msg.data[3] & 2 != 0): logging.info("The number of modules communicating is higher than configured.")
+                
+                found = found | 2 
+	    
             elif msg.arbitration_id == 0xc1:
-            # status message received, check voltage
-                if abs(msg.data[0] - self.maxChargeVoltage) > 0.15* msg.data[0]:
-                    logging.error("Pack voltage read (%dV) differs significantly from configure max charge voltage." % msg.data[0])
-                    break;
-                else:
-                    logging.info("Found Valence U-BMS on %s" % connection)
-                    found = True
-                    break;
+            # check pack voltage
+                if abs(2*msg.data[0] - self.maxChargeVoltage) > 0.15*self.maxChargeVoltage:
+                    logging.error("Pack voltage of %dV differs significantly from configured max charge voltage %dV.",  msg.data[0], self.maxChargeVoltage)
+                    found = found | 1 
+           
 
-        if found:
+        if found == 3 :
         # create a cyclic mode command message simulating a VMU master
         # a U-BMS in slave mode according to manual section 6.4.1 switches to standby
         # after 20 seconds of not receiving it
@@ -113,8 +126,8 @@ class UbmsBattery(can.Listener):
         if msg.arbitration_id == 0xc0:
             self.soc = msg.data[0]
             self.mode = msg.data[1]
-            self.state = self.opState[self.mode & 0xc]
-            self.firmwareVersion = self.state #FIXME where to put state such that it is visible in GUI
+            self.state = self.opState[self.mode & 0x3]
+            self.firmwareVersion = 0 
             self.voltageAndCellTAlarms = msg.data[2]
             self.internalErrors = msg.data[3]
             self.currentAndPcbTAlarms = msg.data[4]
@@ -128,7 +141,7 @@ class UbmsBattery(can.Listener):
             self.numberOfModulesBalancing = msg.data[6]
 
         elif msg.arbitration_id == 0xc1:
-#                self.voltage = msg.data[0] * 1 # voltage scale factor depends on BMS configuration!
+#            self.voltage = msg.data[0] * 1 # voltage scale factor depends on BMS configuration!
             self.current = struct.unpack('Bb',msg.data[0:2])[1]
 
             if (self.mode & 0x2) != 0 : #provided in drive mode only
@@ -136,7 +149,7 @@ class UbmsBattery(can.Listener):
                 self.maxChargeCurrent =  int((struct.unpack('<h', bytearray([msg.data[5],msg.data[7]]))[0])/10)
                 logging.debug("Icmax %dA Idmax %dA", self.maxChargeCurrent, self.maxDischargeCurrent)
 
-            logging.debug("I: %dA U: %dV",self.current, self.voltage)
+            logging.debug("I: %dA U: %dV",self.current, msg.data[0])
 
         elif msg.arbitration_id == 0xc2:
             #charge mode only
@@ -172,7 +185,7 @@ class UbmsBattery(can.Listener):
 
             #update pack voltage at each arrival of the last modules cell voltages
             if module == self.numberOfModules-1:
-                self.voltage = sum(self.moduleVoltage[0:2])/1000.0 #adjust slice to number of modules in series
+                self.voltage = sum(self.moduleVoltage[0:self.modulesInSeries])/1000.0
 
         elif msg.arbitration_id in [0x46a, 0x46b, 0x46c, 0x46d]:
             iStart = (msg.arbitration_id - 0x46a) * 3
@@ -208,23 +221,25 @@ class UbmsBattery(can.Listener):
     #change operational mode of the BMS, valid values see opModes (accepting strings and numbers)
     #transition between charge and drive only via standby(1-0-2)
     def set_mode(self, value):
-        if not isinstance(self.cyclicModeTask, can.ModifiableCyclicTaskABC):
-            logging.error("No support for modification of a cyclic message. Cannot change mode.")
-            return
 
-        if value in self.opModes.values():
-            value = list(opModes.keys())[list(opModes.values()).index(value)]
+        #translate values coming from GUI/dbus to U-BMS values
+        mode = self.guiModeKey.get(value)
 
-        elif value not in self.opModes.keys():
+        if mode == None:
             logging.error('Invalid mode value %d' % value)
-            return
+            return False
 
-        logging.info('Changing mode to %s'% self.opModes[value])
+        logging.info('Changing mode to %s'% self.opModes[mode])
+#        self.cyclicModeTask.stop()
 
         msg = can.Message(arbitration_id=0x440,
-                      data=[0, int(value), 0, 0],
+                      data=[0, mode, 0, 0],
                       extended_id=False)
-        self.cyclicModeTask.modify_data(msg)
+
+        self.cyclicModeTask.modify(msg)
+#        self.cyclicModeTask.start() 
+
+        return True
 
 
 # === All code below is to simply run it from the commandline for debugging purposes ===

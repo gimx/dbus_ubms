@@ -80,20 +80,54 @@ class DbusBatteryService:
         self._dbusservice.add_path('/Alarms/HighTemperature', 0)
         self._dbusservice.add_path('/Balancing', 0)
         self._dbusservice.add_path('/System/HasTemperature', 1)
-        self._dbusservice.add_path('/System/NrOfBatteries', 8)
-        self._dbusservice.add_path('/System/NrOfModulesOnline', 8)
+        self._dbusservice.add_path('/System/NrOfBatteries', self._bat.numberOfModules)
+        self._dbusservice.add_path('/System/NrOfModulesOnline', self._bat.numberOfModules)
         self._dbusservice.add_path('/System/NrOfModulesOffline', 0)
         self._dbusservice.add_path('/System/NrOfModulesBlockingDischarge', 0)
         self._dbusservice.add_path('/System/NrOfModulesBlockingCharge', 0)
         self._dbusservice.add_path('/System/NrOfBatteriesBalancing', 0)
-        self._dbusservice.add_path('/System/BatteriesParallel', 2)
-        self._dbusservice.add_path('/System/BatteriesSeries', 4)
-        self._dbusservice.add_path('/System/NrOfCellsPerBattery', 4)
+        self._dbusservice.add_path('/System/BatteriesParallel', self._bat.numberOfStrings)
+        self._dbusservice.add_path('/System/BatteriesSeries', self._bat.modulesInSeries)
+        self._dbusservice.add_path('/System/NrOfCellsPerBattery', self._bat.cellsPerModule)
         self._dbusservice.add_path('/System/MinVoltageCellId', 'M_C_')
         self._dbusservice.add_path('/System/MaxVoltageCellId', 'M_C_')
         self._dbusservice.add_path('/System/MinCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxCellTemperature', 10.0)
         self._dbusservice.add_path('/System/MaxPcbTemperature', 10.0)
+
+        BATTERY_CELL_DATA_FORMAT = 1
+
+        if BATTERY_CELL_DATA_FORMAT > 0:                                               
+            for i in range(1, self._bat.cellsPerModule * self._bat.numberOfModules + 1):                                  
+                cellpath = (                                                                 
+                    "/Cell/%s/Volts"                                                         
+                    if (BATTERY_CELL_DATA_FORMAT & 2)                                  
+                    else "/Voltages/Cell%s"                                                  
+                )                                                                            
+                self._dbusservice.add_path(                                                  
+                    cellpath % (str(i)),                                                     
+                    None,                                                                    
+                    writeable=True,                                                          
+                    gettextcallback=lambda p, v: "{:0.3f}V".format(v),                       
+                )                                                                            
+                if BATTERY_CELL_DATA_FORMAT & 1:                                       
+                    self._dbusservice.add_path(                                              
+                        "/Balances/Cell%s" % (str(i)), None, writeable=True                  
+                    )                                                                        
+            pathbase = "Cell" if (BATTERY_CELL_DATA_FORMAT & 2) else "Voltages"        
+            self._dbusservice.add_path(                                                      
+                "/%s/Sum" % pathbase,                                                        
+                None,                                                                        
+                writeable=True,                                                              
+                gettextcallback=lambda p, v: "{:2.2f}V".format(v),                           
+            )                                                                                
+            self._dbusservice.add_path(                                                      
+                "/%s/Diff" % pathbase,                                                       
+                None,                                                                        
+                writeable=True,                                                              
+                gettextcallback=lambda p, v: "{:0.3f}V".format(v),                           
+            )                                                                                
+
 
         self._settings = SettingsDevice(
                 bus=dbus.SystemBus() if (platform.machine() == 'armv7l') else dbus.SessionBus(),
@@ -244,24 +278,51 @@ class DbusBatteryService:
         self._dbusservice['/Dc/0/Temperature'] = self._bat.maxCellTemperature
 
         #only update the below every 10s to reduce load
-#       if datetime.now().second not in [0, 20, 40]:
-#               return True
+        if datetime.now().second not in [0, 20, 40]:
+               return True
 
         chain = itertools.chain(*self._bat.cellVoltages)
         flatVList = list(chain)
+
         index = flatVList.index(max(flatVList))
         m = math.floor(index / 4)
         c = index % 4
         self._dbusservice['/System/MaxVoltageCellId'] = 'M'+str(m+1)+'C'+str(c+1)
+        self._dbusservice['/System/MaxCellVoltage'] = self._bat.maxCellVoltage
+
         index = flatVList.index(min(flatVList))
         m = math.floor(index / 4)
         c = index % 4
         self._dbusservice['/System/MinVoltageCellId'] = 'M'+str(m+1)+'C'+str(c+1)
-        self._dbusservice['/System/MaxCellVoltage'] = self._bat.maxCellVoltage
+        self._dbusservice['/System/MinCellVoltage'] = self._bat.minCellVoltage
+
+# cell voltages
+        try:
+            voltageSum = 0
+            for i in range(len(flatVList)):
+                voltage = flatVList[i]/1000.0
+                cellpath = (
+                    "/Voltages/Cell%s"
+                )
+                self._dbusservice[cellpath % (str(i+1))] = voltage
+                self._dbusservice[
+                    "/Balances/Cell%s" % (str(i+1))
+                ] = voltage 
+                if voltage and i < self._bat.cellsPerModule * self._bat.modulesInSeries:
+                    voltageSum += voltage
+            self._dbusservice["/Voltages/Sum"] = voltageSum
+            self._dbusservice["/Voltages/Diff"] = (
+                self._bat.maxCellVoltage - self._bat.minCellVoltage
+            )
+        except Exception:
+            pass
+
+
+        
         if (self._bat.maxCellVoltage > self._dbusservice['/History/MaxCellVoltage'] ):
             self._dbusservice['/History/MaxCellVoltage'] = self._bat.maxCellVoltage
             logging.info("New maximum cell voltage: %f", self._bat.maxCellVoltage)
-        self._dbusservice['/System/MinCellVoltage'] = self._bat.minCellVoltage
+
         if (0 < self._bat.minCellVoltage < self._dbusservice['/History/MinCellVoltage'] ):
             self._dbusservice['/History/MinCellVoltage'] = self._bat.minCellVoltage
             logging.info("New minimum cell voltage: %f", self._bat.minCellVoltage)
@@ -346,6 +407,8 @@ def main():
 
     from dbus.mainloop.glib import DBusGMainLoop
     # Have a mainloop, so we can send/receive asynchronous calls to and from dbus
+    if sys.version_info.major == 2:
+        gobject.threads_init()
     DBusGMainLoop(set_as_default=True)
 
     battery_output = DbusBatteryService(
