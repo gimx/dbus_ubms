@@ -29,7 +29,7 @@ from vedbus import VeDbusService
 from ve_utils import exit_on_error
 from settingsdevice import SettingsDevice
 
-VERSION = '0.9'
+VERSION = '1.0'
 
 def handle_changed_setting(setting, oldvalue, newvalue):
     logging.debug('setting changed, setting: %s, old: %s, new: %s' % (setting, oldvalue, newvalue))
