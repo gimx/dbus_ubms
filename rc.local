@@ -1,4 +1,8 @@
 #!/bin/sh
+slcan_attach -f -s5 -o /dev/ttyACM0
+slcand ttyACM0 slcan0
+ifconfig slcan0 up
+#svc -u /service/dbus-ubms.slcan0
 # ip link set can0 up type can bitrate 250000
-ip link set can0 up type can bitrate 250000
-svc -u /service/dbus-ubms.can0
+#ip link set can8 up type can bitrate 250000
+#svc -u /service/dbus-ubms.can8
