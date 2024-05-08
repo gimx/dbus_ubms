@@ -67,7 +67,7 @@ class DbusBatteryService:
         self._dbusservice.add_path('/InstalledCapacity', int(capacity))
         self._dbusservice.add_path('/Dc/0/Temperature', 25)
         self._dbusservice.add_path('/Info/MaxChargeCurrent', 0)
-        self._dbusservice.add_path('/Info/MaxDischargeCurrent', int(capacity/2))
+        self._dbusservice.add_path('/Info/MaxDischargeCurrent', 0)
         self._dbusservice.add_path('/Info/MaxChargeVoltage', float(voltage))
         self._dbusservice.add_path('/Info/BatteryLowVoltage', 44.8)
         self._dbusservice.add_path('/Alarms/CellImbalance', 0)
@@ -401,6 +401,9 @@ def main():
     if not args.voltage:
         logging.error('Maximum charge voltage not specified. Exiting.')
         return
+
+    os.system('ip link set can0 type can bitrate 250000')
+    os.system('ifconfig can0 up')
 
     logging.info('Starting dbus_ubms %s on %s ' %
              (VERSION, args.interface))
