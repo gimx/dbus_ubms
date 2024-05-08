@@ -16,8 +16,6 @@ import can
 import struct
 from argparse import ArgumentParser
 
-VERSION = '0.9'
-
 class UbmsBattery(can.Listener):
     opModes = {
         0:"Standby",
@@ -39,8 +37,8 @@ class UbmsBattery(can.Listener):
     def __init__(self, voltage, capacity, connection):
         self.capacity = capacity
         self.maxChargeVoltage = voltage
-        self.numberOfModules = 9 
-        self.numberOfStrings = 3 
+        self.numberOfModules = 8 
+        self.numberOfStrings = 2 
         self.modulesInSeries = int(self.numberOfModules / self.numberOfStrings)
         self.cellsPerModule = 4
         self.chargeComplete = 0
@@ -63,8 +61,8 @@ class UbmsBattery(can.Listener):
         self.moduleSoc = [0 for i in range(self.numberOfModules)]
         self.maxCellVoltage = 3.2
         self.minCellVoltage = 3.2
-        self.maxChargeCurrent = self.capacity * 0.25
-        self.maxDischargeCurrent = self.capacity * 0.4
+        self.maxChargeCurrent = 5.0
+        self.maxDischargeCurrent = 5.0
         self.partnr = 0
         self.firmwareVersion = 'unknown'
         self.numberOfModulesBalancing = 0
@@ -146,7 +144,7 @@ class UbmsBattery(can.Listener):
 
             if (self.mode & 0x2) != 0 : #provided in drive mode only
                 self.maxDischargeCurrent =  int((struct.unpack('<h', msg.data[3:5])[0])/10)
-                self.maxChargeCurrent =  int((struct.unpack('<h', bytearray([msg.data[5],msg.data[7]]))[0])/10)
+                self.maxChargeCurrent =  int((struct.unpack('<h', bytearray([msg.data[5],msg.data[7]]))[0])/5)
                 logging.debug("Icmax %dA Idmax %dA", self.maxChargeCurrent, self.maxDischargeCurrent)
 
             logging.debug("I: %dA U: %dV",self.current, msg.data[0])
@@ -230,6 +228,7 @@ class UbmsBattery(can.Listener):
             return False
 
         logging.info('Changing mode to %s'% self.opModes[mode])
+#FIXME changing cyclic CAN messages does not work on the fly -> disabled for the moment
 #        self.cyclicModeTask.stop()
 
         msg = can.Message(arbitration_id=0x440,
