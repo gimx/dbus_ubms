@@ -59,12 +59,13 @@ class UbmsBattery(can.Listener):
         self.moduleVoltage = [0 for i in range(self.numberOfModules)]
         self.moduleCurrent = [0 for i in range(self.numberOfModules)]
         self.moduleSoc = [0 for i in range(self.numberOfModules)]
+        self.moduleTemp = [0 for i in range(self.numberOfModules)]
         self.maxCellVoltage = 3.2
         self.minCellVoltage = 3.2
         self.maxChargeCurrent = 5.0
         self.maxDischargeCurrent = 5.0
         self.partnr = 0
-        self.firmwareVersion = 'unknown'
+        self.firmwareVersion = 0 
         self.numberOfModulesBalancing = 0
         self.numberOfModulesCommunicating = 0
         self.updated = -1
@@ -125,7 +126,6 @@ class UbmsBattery(can.Listener):
             self.soc = msg.data[0]
             self.mode = msg.data[1]
             self.state = self.opState[self.mode & 0x3]
-            self.firmwareVersion = 0 
             self.voltageAndCellTAlarms = msg.data[2]
             self.internalErrors = msg.data[3]
             self.currentAndPcbTAlarms = msg.data[4]
@@ -144,7 +144,7 @@ class UbmsBattery(can.Listener):
 
             if (self.mode & 0x2) != 0 : #provided in drive mode only
                 self.maxDischargeCurrent =  int((struct.unpack('<h', msg.data[3:5])[0])/10)
-                self.maxChargeCurrent =  int((struct.unpack('<h', bytearray([msg.data[5],msg.data[7]]))[0])/5)
+                self.maxChargeCurrent =  int((struct.unpack('<h', bytearray([msg.data[5],msg.data[7]]))[0])/10)
                 logging.debug("Icmax %dA Idmax %dA", self.maxChargeCurrent, self.maxDischargeCurrent)
 
             logging.debug("I: %dA U: %dV",self.current, msg.data[0])
@@ -162,6 +162,12 @@ class UbmsBattery(can.Listener):
                 #allow charge with 0.1C
                     self.maxChargeCurrent = self.capacity * 0.1
 
+        elif msg.arbitration_id == 0x180:
+               self.firmwareVersion = msg.data[0]
+               #self.cust_rel_rev = msg.data[1]
+               #self.boot_load_rev = msg.data[2]
+               #self.bms_type = msg.data[3]
+               #self.hw_rev = msg.data[4]
 
         elif msg.arbitration_id == 0xc4:
             self.maxCellTemperature =  msg.data[0]-40
@@ -198,6 +204,12 @@ class UbmsBattery(can.Listener):
             mSoc = struct.unpack(fmt, msg.data[1:msg.dlc])
             self.moduleSoc[iStart:] = tuple((m * 100)>>8 for m in mSoc)
             logging.debug("SOCmodule %s", ",".join(str(x) for x in self.moduleSoc))
+
+        elif msg.arbitration_id in [0x76a, 0x76b, 0x76c, 0x76d]:   
+            iStart = (msg.arbitration_id - 0x76a) * 3 
+            self.moduleTemp[iStart] = ((msg.data[2] * 256) + msg.data[3]) * 0.01
+            self.moduleTemp[iStart+1] = ((msg.data[4] * 256) + msg.data[5]) * 0.01
+            self.moduleTemp[iStart+2] = ((msg.data[6] * 256) + msg.data[7]) * 0.01
 
     def prnt(self):
         print(self.mode)
