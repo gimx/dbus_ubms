@@ -27,7 +27,7 @@ from vedbus import VeDbusService
 from ve_utils import exit_on_error
 from settingsdevice import SettingsDevice
 
-VERSION = "1.0"
+VERSION = "1.1.0"
 
 
 def handle_changed_setting(setting, oldvalue, newvalue):
