@@ -37,7 +37,7 @@ jobs:
             --exclude __pycache__ \
             --exclude candumps/ \
             --exclude ext/ \
-            rc/
+            service/
 
       - name: Release
         uses: softprops/action-gh-release@v1
