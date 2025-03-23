@@ -9,10 +9,8 @@ The BMS should be operated in slave mode, VMU packages are being sent
 """
 import logging
 import itertools
-
 import can
 import struct
-from argparse import ArgumentParser
 
 
 class UbmsBattery(can.Listener):
@@ -81,7 +79,7 @@ class UbmsBattery(can.Listener):
             except can.CanError:
                 logging.error("Canbus error")
 
-            if msg == None:
+            if msg is None:
                 # timeout no system connected
                 logging.error(
                     "No messages on canbus %s received. Check connection and speed setting."
@@ -302,7 +300,7 @@ class UbmsBattery(can.Listener):
         # translate values coming from GUI/dbus to U-BMS values
         mode = self.guiModeKey.get(value)
 
-        if mode == None:
+        if mode is None:
             logging.error("Invalid mode value %d" % value)
             return False
 

@@ -216,7 +216,7 @@ class DbusBatteryService:
         return str(value)
 
     def _transmit_mode(self, path, value):
-        if self._bat.set_mode(value) == True:
+        if self._bat.set_mode(value) is True:
             self._dbusservice[path] = value
 
     def __del__(self):
