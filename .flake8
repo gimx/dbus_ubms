@@ -1,0 +1,10 @@
+[flake8]
+max-line-length = 160
+per-file-ignores =
+    dbus_ubms.py: E501
+    ubmsbattery.py: E501
+exclude =
+    ./ext/
+extend-ignore:
+    # E203 whitespace before ':' conflicts with black code formatting. Will be ignored in flake8
+    E203
