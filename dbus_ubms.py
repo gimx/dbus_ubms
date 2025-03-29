@@ -23,9 +23,9 @@ from ubmsbattery import UbmsBattery
 
 # our own packages
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), "ext/velib_python"))
-from vedbus import VeDbusService # noqa: E402
-from ve_utils import exit_on_error # noqa: E402
-from settingsdevice import SettingsDevice # noqa: E402
+from vedbus import VeDbusService  # noqa: E402
+from ve_utils import exit_on_error  # noqa: E402
+from settingsdevice import SettingsDevice  # noqa: E402
 
 VERSION = "1.1.0"
 
@@ -72,8 +72,10 @@ class DbusBatteryService:
         self._dbusservice.add_path("/DeviceInstance", deviceinstance)
         self._dbusservice.add_path("/ProductId", 0)
         self._dbusservice.add_path("/ProductName", productname)
-        self._dbusservice.add_path("/FirmwareVersion", "unknown")
-        self._dbusservice.add_path("/HardwareVersion", "unknown")
+        self._dbusservice.add_path("/Manufacturer", "Valence")
+        self._dbusservice.add_path("/Family", self._bat.bms_type)
+        self._dbusservice.add_path("/FirmwareVersion", self._bat.firmwareVersion)
+        self._dbusservice.add_path("/HardwareVersion", self._bat.hw_rev)
         self._dbusservice.add_path("/Connected", 0)
         # Create battery specific objects
         self._dbusservice.add_path("/State", 0)
@@ -248,7 +250,7 @@ class DbusBatteryService:
         dt = datetime.now() - datetime.fromtimestamp(
             float(self._settings["TimeLastFull"])
         )
-        
+      
         # estimate available capacity from SOC and installed capacity
         self._dbusservice["/Capacity"] = int(
                 self._dbusservice["/InstalledCapacity"]
@@ -258,9 +260,9 @@ class DbusBatteryService:
         # estimate SOH by BMS calculated SOC difference to 100% vs consumed amphours to full capacity
         # only do this if the last full charge was less than 24h ago and SOC < 70%
         if dt.total_seconds() < 24 * 3600 and self._bat.soc < 70:
-            
+         
             self._dbusservice["/Soh"] = int(
-                -self._dbusservice["/ConsumedAmphours"] / (100 - self._bat.soc) 
+                -self._dbusservice["/ConsumedAmphours"] / (100 - self._bat.soc)
                 * self._dbusservice["/InstalledCapacity"]
             )
             logging.info(
@@ -536,7 +538,7 @@ def main():
         gobject.threads_init()
     DBusGMainLoop(set_as_default=True)
 
-    battery_output = DbusBatteryService(
+    DbusBatteryService(
         servicename="com.victronenergy.battery",
         connection=args.interface,
         deviceinstance=0,
