@@ -23,9 +23,9 @@ from ubmsbattery import UbmsBattery
 
 # our own packages
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), "ext/velib_python"))
-from vedbus import VeDbusService
-from ve_utils import exit_on_error
-from settingsdevice import SettingsDevice
+from vedbus import VeDbusService # noqa: E402
+from ve_utils import exit_on_error # noqa: E402
+from settingsdevice import SettingsDevice # noqa: E402
 
 VERSION = "1.1.0"
 
@@ -248,15 +248,20 @@ class DbusBatteryService:
         dt = datetime.now() - datetime.fromtimestamp(
             float(self._settings["TimeLastFull"])
         )
-        # if full within the last 24h and more than *0% consumed, estimate actual capacity and SOH based on consumed amphours from full and SOC reported
+        
+        # estimate available capacity from SOC and installed capacity
+        self._dbusservice["/Capacity"] = int(
+                self._dbusservice["/InstalledCapacity"]
+                * self._bat.soc
+        )
+
+        # estimate SOH by BMS calculated SOC difference to 100% vs consumed amphours to full capacity
+        # only do this if the last full charge was less than 24h ago and SOC < 70%
         if dt.total_seconds() < 24 * 3600 and self._bat.soc < 70:
-            self._dbusservice["/Capacity"] = int(
-                -self._dbusservice["/ConsumedAmphours"] * 100 / (100 - self._bat.soc)
-            )
+            
             self._dbusservice["/Soh"] = int(
-                self._dbusservice["/Capacity"]
-                * 100
-                / self._dbusservice["/InstalledCapacity"]
+                -self._dbusservice["/ConsumedAmphours"] / (100 - self._bat.soc) 
+                * self._dbusservice["/InstalledCapacity"]
             )
             logging.info(
                 "SOH: %d, Capacity: %d ",
