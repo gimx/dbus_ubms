@@ -18,6 +18,16 @@ class UbmsBattery(can.Listener):
     guiModeKey = {252: 0, 3: 2}
 
     opState = {0: 0, 1: 9, 2: 9}
+    # Victron BMS states
+    # 0-8 init
+    #   9 running
+    #  10 error
+    #  12 shutdown
+    #  13 updating
+    #  14 standby
+    #  15 going to run
+    #  16 pre-charge
+    #  17 contactor check
 
     def __init__(self, voltage, capacity, connection):
         self.capacity = capacity
@@ -300,14 +310,14 @@ class UbmsBattery(can.Listener):
             fmt = ">" + "h" * int((msg.dlc - 2) / 2)
             mCurrent = struct.unpack(fmt, msg.data[2 : msg.dlc])
             self.moduleCurrent[iStart:] = mCurrent
-            logging.debug("Imodule %s", ",".join(str(x) for x in self.moduleCurrent))
+            # logging.debug("Imodule %s", ",".join(str(x) for x in self.moduleCurrent))
 
         elif msg.arbitration_id in [0x6A, 0x6B]:
             iStart = (msg.arbitration_id - 0x6A) * 7
             fmt = "B" * (msg.dlc - 1)
             mSoc = struct.unpack(fmt, msg.data[1 : msg.dlc])
             self.moduleSoc[iStart:] = tuple((m * 100) >> 8 for m in mSoc)
-            logging.debug("SOCmodule %s", ",".join(str(x) for x in self.moduleSoc))
+            # logging.debug("SOCmodule %s", ",".join(str(x) for x in self.moduleSoc))
 
         elif msg.arbitration_id in [0x76A, 0x76B, 0x76C, 0x76D]:
             iStart = (msg.arbitration_id - 0x76A) * 3
@@ -316,22 +326,19 @@ class UbmsBattery(can.Listener):
                 self.moduleTemp[iStart + 1] = ((msg.data[4] * 256) + msg.data[5]) * 0.01
             if msg.dlc > 7: 
                 self.moduleTemp[iStart + 2] = ((msg.data[6] * 256) + msg.data[7]) * 0.01
-            logging.debug("Tmodule %s", ",".join(str(x) for x in self.moduleTemp))   
+            # logging.debug("Tmodule %s", ",".join(str(x) for x in self.moduleTemp))   
 
     # change operational mode of the BMS, valid values see opModes (accepting strings and numbers)
     # transition between charge and drive only via standby(1-0-2)
-    def set_mode(self, value):
+    def set_mode(self, mode):
 
-        # translate values coming from GUI/dbus to U-BMS values
-        mode = self.guiModeKey.get(value)
-
-        if mode is None or self.cyclicModeTask is None:
+        if not mode in [0, 1, 2]:
+            logging.warning("Invalid mode requested %s " % str(value))
             return False
  
         if not isinstance(self.cyclicModeTask, can.ModifiableCyclicTaskABC):
             msg = can.Message(arbitration_id=0x440, data=[0, mode, 0, 0], extended_id=False)
             self.cyclicModeTask.modify(msg)
-            logging.debug("modified")
             
         else:
             self.cyclicModeTask.stop()

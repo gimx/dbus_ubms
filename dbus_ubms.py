@@ -73,15 +73,12 @@ class DbusBatteryService:
         self._dbusservice.add_path("/ProductId", 0)
         self._dbusservice.add_path("/ProductName", productname)
         self._dbusservice.add_path("/Manufacturer", "Valence")
-        self._dbusservice.add_path("/Family", self._bat.bms_type)
         self._dbusservice.add_path("/FirmwareVersion", self._bat.firmwareVersion)
-        self._dbusservice.add_path("/HardwareVersion", self._bat.hw_rev)
+        self._dbusservice.add_path("/HardwareVersion", "type: " + str(self._bat.bms_type) + " rev. "+ hex(self._bat.hw_rev))
         self._dbusservice.add_path("/Connected", 0)
         # Create battery specific objects
-        self._dbusservice.add_path("/State", 0)
-        self._dbusservice.add_path(
-            "/Mode", 1, writeable=True, onchangecallback=self._transmit_mode
-        )
+        self._dbusservice.add_path("/State", 14, writeable=True)
+        self._dbusservice.add_path("/Mode", 1, writeable=True, onchangecallback=self._transmit_mode) 
         self._dbusservice.add_path("/Soh", 100)
         self._dbusservice.add_path("/Capacity", int(capacity))
         self._dbusservice.add_path("/InstalledCapacity", int(capacity))
@@ -218,7 +215,10 @@ class DbusBatteryService:
         return str(value)
 
     def _transmit_mode(self, path, value):
-        if self._bat.set_mode(value) is True:
+        # translate values coming from GUI/dbus to U-BMS values
+        mode = self._bat.guiModeKey.get(value)
+
+        if self._bat.set_mode(mode) is True:
             self._dbusservice[path] = value
 
     def __del__(self):
@@ -360,9 +360,9 @@ class DbusBatteryService:
                 self._settings["TimeLastFull"] = time()
 
         self._dbusservice["/State"] = self._bat.state
-        self._dbusservice["/Mode"] = self._bat.guiModeKey.get(
-            (self._bat.mode & 0x3), 252
-        )
+        #self._dbusservice["/Mode"] = self._bat.guiModeKey.get(
+        #    (self._bat.mode & 0x3), 252
+        #)
         self._dbusservice["/Balancing"] = (self._bat.mode & 0x10) >> 4
         self._dbusservice["/Dc/0/Current"] = self._bat.current
         self._dbusservice["/Dc/0/Voltage"] = self._bat.voltage
@@ -412,11 +412,11 @@ class DbusBatteryService:
 
         if self._bat.maxCellVoltage > self._dbusservice["/History/MaxCellVoltage"]:
             self._dbusservice["/History/MaxCellVoltage"] = self._bat.maxCellVoltage
-            logging.info("New maximum cell voltage: %f", self._bat.maxCellVoltage)
+            logging.debug("New maximum cell voltage: %f", self._bat.maxCellVoltage)
 
         if 0 < self._bat.minCellVoltage < self._dbusservice["/History/MinCellVoltage"]:
             self._dbusservice["/History/MinCellVoltage"] = self._bat.minCellVoltage
-            logging.info("New minimum cell voltage: %f", self._bat.minCellVoltage)
+            logging.debug("New minimum cell voltage: %f", self._bat.minCellVoltage)
         self._dbusservice["/System/MinCellTemperature"] = self._bat.minCellTemperature
         self._dbusservice["/System/MaxCellTemperature"] = self._bat.maxCellTemperature
         self._dbusservice["/System/MaxPcbTemperature"] = self._bat.maxPcbTemperature
