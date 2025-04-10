@@ -17,7 +17,7 @@ class UbmsBattery(can.Listener):
 
     guiModeKey = {252: 0, 3: 2}
 
-    opState = {0: 0, 1: 9, 2: 9}
+    opState = {0: 14, 1: 9, 2: 9}
     # Victron BMS states
     # 0-8 init
     #   9 running
