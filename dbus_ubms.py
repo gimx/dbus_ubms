@@ -254,7 +254,7 @@ class DbusBatteryService:
         # estimate available capacity from SOC and installed capacity
         self._dbusservice["/Capacity"] = int(
                 self._dbusservice["/InstalledCapacity"]
-                * self._bat.soc
+                * self._bat.soc * 0.01
         )
 
         # estimate SOH by BMS calculated SOC difference to 100% vs consumed amphours to full capacity
@@ -370,7 +370,7 @@ class DbusBatteryService:
         self._dbusservice["/Dc/0/Power"] = power
         self._dbusservice["/Dc/0/Temperature"] = self._bat.maxCellTemperature
 
-        # only update the below every 10s to reduce load
+        # only update the below every 20s to reduce load
         if datetime.now().second not in [0, 20, 40]:
             return True
 
