@@ -251,12 +251,6 @@ class DbusBatteryService:
             float(self._settings["TimeLastFull"])
         )
       
-        # estimate available capacity from SOC and installed capacity
-        self._dbusservice["/Capacity"] = int(
-                self._dbusservice["/InstalledCapacity"]
-                * self._bat.soc * 0.01
-        )
-
         # estimate SOH by BMS calculated SOC difference to 100% vs consumed amphours to full capacity
         # only do this if the last full charge was less than 24h ago and SOC < 70%
         if dt.total_seconds() < 24 * 3600 and self._bat.soc < 70:
@@ -373,6 +367,12 @@ class DbusBatteryService:
         # only update the below every 20s to reduce load
         if datetime.now().second not in [0, 20, 40]:
             return True
+
+        # estimate available capacity from SOC and installed capacity
+        self._dbusservice["/Capacity"] = int(
+                self._dbusservice["/InstalledCapacity"]
+                * self._bat.soc * 0.01
+        )
 
         chain = itertools.chain(*self._bat.cellVoltages)
         flatVList = list(chain)
