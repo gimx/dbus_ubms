@@ -207,9 +207,9 @@ class UbmsBattery(can.Listener):
                 self.numberOfModules = self.numberOfModulesCommunicating
 
             self.numberOfModulesBalancing = msg.data[6]
-            self.shutdownReason = msg.data[7]
-            if self.shutdownReason != 0:
-                logging.warning("Shutdown reason 0x%x", self.shutdownReason)
+
+            if (self.shutdownReason == 0 and msg.data[7] != 0) or self.shutdownReason != msg.data[7]:
+                logging.warning("Shutdown reason 0x%x", msg.data[7])
             
                 logging.debug(
                     "SOC %d%% mode %d state %s alarms 0x%x 0x%x 0x%x",
@@ -220,6 +220,8 @@ class UbmsBattery(can.Listener):
                     self.internalErrors,
                     self.currentAndPcbTAlarms,
                 )
+
+            self.shutdownReason = msg.data[7]
 
         elif msg.arbitration_id == 0xC1:
             #            self.voltage = msg.data[0] * 1 # voltage scale factor depends on BMS configuration!
