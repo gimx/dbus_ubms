@@ -55,7 +55,8 @@ class DbusBatteryService:
 
         try:
             self._dbusservice = VeDbusService(
-                servicename + ".socketcan_" + connection + "_di" + str(deviceinstance)
+                servicename + ".socketcan_" + connection + "_di" + str(deviceinstance),
+                register=False
             )
         except:
             exit
@@ -206,6 +207,7 @@ class DbusBatteryService:
         self._dbusservice["/History/ChargedEnergy"] = 0
         self._dbusservice["/History/DischargedEnergy"] = 0
 
+        self._dbusservice.register()
         GLib.timeout_add(self._settings["interval"], exit_on_error, self._update)
 
     def _gettext(self, path, value):
@@ -268,7 +270,7 @@ class DbusBatteryService:
 
     def _update(self):
         if (self._bat.updated != -1 and self.lastUpdated == 0) or (
-            (self._bat.updated - self.lastUpdated) < 1000
+            (self._bat.updated - self.lastUpdated) < 10
         ):
             self.lastUpdated = self._bat.updated
             self._dbusservice["/Connected"] = 1
