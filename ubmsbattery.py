@@ -72,12 +72,13 @@ class UbmsBattery(can.Listener):
         self.moduleCurrent = [0 for i in range(self.numberOfModules)]
         self.moduleSoc = [0 for i in range(self.numberOfModules)]
         self.moduleTemp = [0 for i in range(self.numberOfModules)]
-        # read once at startup only (0x184, 0x67x), not part of the cyclic filters
+        # second temperature per module (0x67x), decoded in the cyclic path but not in
+        # the CAN filters, add {"can_id": 0x67A, "can_mask": 0xFF0} to receive it
         self.moduleTemp2 = [None for i in range(self.numberOfModules)]
+        # read once at startup only (0x184), not part of the cyclic filters
         self.moduleModel = {}  # module number (1..n) -> model string, e.g. "Cerizay_U27"
         self.moduleSerial = {}  # module number (1..n) -> serial, e.g. "4049"
         self._moduleIdPages = {}  # module number -> {page: payload}
-        self._moduleTemp2Frames = set()
         self._startupInfoDone = False
         self._startupInfoDeadline = 0
         self.maxCellVoltage = 3.2
@@ -108,7 +109,7 @@ class UbmsBattery(can.Listener):
 
         if self._connect_and_verify(connection):
             # Now that we've confirmed connection, update filters for normal operation,
-            # plus the module identity and second temperature messages read once at startup
+            # plus the module identity messages read once at startup
             self._startupInfoDeadline = time.time() + self.STARTUP_INFO_TIMEOUT
             self._set_operational_filters(startup=True)
 
@@ -205,11 +206,10 @@ class UbmsBattery(can.Listener):
 
         return found == 7
 
-    # max time to collect module identities (0x184) and second temperatures (0x67x)
+    # max time to collect module identities (0x184)
     STARTUP_INFO_TIMEOUT = 30
     STARTUP_FILTERS = [
         {"can_id": 0x184, "can_mask": 0xFFF},  # module identity: model, serial
-        {"can_id": 0x67A, "can_mask": 0xFF0},  # second temperature per module
     ]
 
     def _set_operational_filters(self, startup=False):
@@ -391,15 +391,15 @@ class UbmsBattery(can.Listener):
                         pages[3].hex().upper(),
                     )
 
-        elif msg.arbitration_id in [0x67A, 0x67B, 0x67C, 0x67D] and not self._startupInfoDone:
+        elif msg.arbitration_id in [0x67A, 0x67B, 0x67C, 0x67D]:
             # second temperature per module, same layout as 0x76x
+            # (not in the CAN filters, see moduleTemp2)
             iStart = (msg.arbitration_id - 0x67A) * 3
             for k, pos in enumerate(range(2, msg.dlc - 1, 2)):
                 if iStart + k < len(self.moduleTemp2):
                     self.moduleTemp2[iStart + k] = (
                         (msg.data[pos] * 256) + msg.data[pos + 1]
                     ) * 0.01
-            self._moduleTemp2Frames.add(msg.arbitration_id)
 
         if not self._startupInfoDone and self._startupInfoDeadline:
             self._check_startup_info()
@@ -407,34 +407,26 @@ class UbmsBattery(can.Listener):
     def _check_startup_info(self):
         modules = self.numberOfModulesCommunicating or self.numberOfModules
         identitiesComplete = len(self.moduleSerial) >= modules
-        temperaturesComplete = all(
-            t is not None for t in self.moduleTemp2[:modules]
-        )
         timedOut = time.time() > self._startupInfoDeadline
-        if not ((identitiesComplete and temperaturesComplete) or timedOut):
+        if not (identitiesComplete or timedOut):
             return
 
         self._startupInfoDone = True
         self._set_operational_filters()
 
         for m in sorted(self.moduleSerial):
-            t2 = self.moduleTemp2[m - 1] if m - 1 < len(self.moduleTemp2) else None
             logging.info(
-                "Module %d: %s, serial %s, temperatures %s / %s",
+                "Module %d: %s, serial %s",
                 m,
                 self.moduleModel[m],
                 self.moduleSerial[m],
-                "%.1fC" % self.moduleTemp[m - 1] if m - 1 < len(self.moduleTemp) else "-",
-                "%.1fC" % t2 if t2 is not None else "-",
             )
         if timedOut:
             logging.warning(
-                "Startup module info incomplete after %ds: %d of %d identities, "
-                "second temperatures %s",
+                "Module identities incomplete after %ds: %d of %d",
                 self.STARTUP_INFO_TIMEOUT,
                 len(self.moduleSerial),
                 modules,
-                "complete" if temperaturesComplete else "incomplete",
             )
 
         # check the module count configured in the driver against the modules found
