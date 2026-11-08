@@ -77,6 +77,25 @@ or download the above projects as archives, copy and unzip to root home
  to confirm standby. If the process cannot clean up (SIGKILL, power loss) the U-BMS in VMU slave mode
  falls back to standby by itself 20s after the last mode command.
 
+## GUI v2 pages (local display)
+ Two extra pages, modelled after the dbus-serialbattery GUI, are added to the battery page of a U-BMS:
+ - U-BMS - General: voltage, current, power, SoC, cell/PCB temperatures, CVL/CCL/DCL, allow to
+   charge/discharge, modules online/offline/balancing and the Force charging/discharging off switches
+ - U-BMS - Cell Voltages: one row per module with each cell's voltage and deviation from the mean,
+   min cell in blue, max cell in red, plus sum, mean, min, max and diff (updated every 20s)
+
+ Requires Venus OS v3.60 or later and the overlay-fs app in /data/apps/overlay-fs (installed with
+ dbus-serialbattery, or `bash /data/apps/dbus-serialbattery/ext/venus-os_overlay-fs/install.sh`).
+```
+ bash /data/dbus-ubms/gui-v2-install.sh            # install / update
+ bash /data/dbus-ubms/gui-v2-install.sh uninstall  # remove
+```
+ If the dbus-serialbattery GUI is installed, its "General" and "Cell Voltages" entries are hidden for
+ the U-BMS (they stay for all other batteries), so the pages do not show up twice.
+ The menu entries are inserted into PageBattery.qml, so re-run the install after installing the
+ dbus-serialbattery GUI, which overwrites that file. The GUI v2 web version (remote console, VRM) is a
+ compiled build and does not show these pages.
+
 ## Configuration of U-BMS
 ```
  set SOC calculation to minimum (not average)

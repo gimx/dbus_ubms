@@ -1,0 +1,28 @@
+			// dbus-ubms BEGIN (inserted by dbus-ubms gui-v2-install.sh)
+			ListNavigation {
+				id: ubmsGeneralEntry
+				// also used to hide the dbus-serialbattery General/Cell Voltages entries for dbus-ubms
+				readonly property bool isUbms: ubmsProcessName.valid && String(ubmsProcessName.value).indexOf("dbus_ubms") >= 0
+				text: "U-BMS - General"
+				preferredVisible: isUbms
+				onClicked: {
+					Global.pageManager.pushPage("/pages/settings/devicelist/battery/PageBatteryUbms.qml",
+							{ "title": text, "bindPrefix": root.bindPrefix })
+				}
+
+				VeQuickItem {
+					id: ubmsProcessName
+					uid: root.bindPrefix + "/Mgmt/ProcessName"
+				}
+			}
+
+			ListNavigation {
+				text: "U-BMS - Cell Voltages"
+				preferredVisible: ubmsGeneralEntry.isUbms
+				onClicked: {
+					Global.pageManager.pushPage("/pages/settings/devicelist/battery/PageBatteryUbmsCellVoltages.qml",
+							{ "title": text, "bindPrefix": root.bindPrefix })
+				}
+			}
+
+			// dbus-ubms END
