@@ -8,26 +8,47 @@ paths.
 from gi.repository import GLib
 import platform
 import logging
+import signal
 import sys
 import os
 import dbus
 import itertools
 import math
+import subprocess
 
 from time import time
 from datetime import datetime
 from argparse import ArgumentParser
 
-from ubmsbattery import UbmsBattery
-
-
-# our own packages
+# bundled packages (python-can, see ext/VENDORED.md) and velib, must come before
+# importing ubmsbattery; ext first so the bundled python-can is used, not a system one
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), "ext/velib_python"))
+sys.path.insert(1, os.path.join(os.path.dirname(__file__), "ext"))
+
+from ubmsbattery import UbmsBattery  # noqa: E402
 from vedbus import VeDbusService  # noqa: E402
-from ve_utils import exit_on_error  # noqa: E402
 from settingsdevice import SettingsDevice  # noqa: E402
 
-VERSION = "1.1.0"
+
+
+def get_git_version():
+    """Executes git describe to fetch the current git tag/hash of the file directory."""
+    try:
+        script_dir = os.path.dirname(os.path.realpath(__file__))
+        return (
+            subprocess.check_output(
+                ["git", "describe", "--tags", "--always", "--dirty"],
+                cwd=script_dir,
+                stderr=subprocess.DEVNULL,
+            )
+            .decode("utf-8")
+            .strip()
+        )
+    except Exception:
+        return "Unknown"
+
+
+VERSION = get_git_version()
 
 
 def handle_changed_setting(setting, oldvalue, newvalue):
@@ -45,33 +66,44 @@ class DbusBatteryService:
         capacity,
         productname="Valence U-BMS",
         connection="can0",
+        startup_delay=10,
+        max_voltage_delta=1.0,
     ):
         self.minUpdateDone = 0
         self.dailyResetDone = 0
-        self.lastUpdated = 0
         self._bat = UbmsBattery(
-            capacity=capacity, voltage=voltage, connection=connection
+            capacity=capacity,
+            voltage=voltage,
+            connection=connection,
+            start_mode=0,  # always start in standby, i.e. contactor open
         )
+        self._maxVoltageDelta = max_voltage_delta
+        self._startupCheckPending = True
 
         try:
             self._dbusservice = VeDbusService(
                 servicename + ".socketcan_" + connection + "_di" + str(deviceinstance),
                 register=False
             )
-        except:
-            exit
+        except Exception:
+            logging.exception("Failed to create dbus service")
+            self._bat.shutdown()
+            raise
 
         # Create the management objects, as specified in the ccgx dbus-api document
         self._dbusservice.add_path("/Mgmt/ProcessName", __file__)
         self._dbusservice.add_path(
             "/Mgmt/ProcessVersion",
-            VERSION + " running on Python " + platform.python_version(),
+            f"{VERSION} (Python {platform.python_version()})",
         )
         self._dbusservice.add_path("/Mgmt/Connection", connection)
 
         # Create the mandatory objects
         self._dbusservice.add_path("/DeviceInstance", deviceinstance)
-        self._dbusservice.add_path("/ProductId", 0)
+        # PROVISIONAL product id, self-chosen (not assigned by Victron, there is no public
+        # registration process; request pending). gui-v2 attaches the plugin pages of
+        # gui-v2/Ubms to devices with this product id, change both together.
+        self._dbusservice.add_path("/ProductId", 0xBA75)
         self._dbusservice.add_path("/ProductName", productname)
         self._dbusservice.add_path("/Manufacturer", "Valence")
         self._dbusservice.add_path("/FirmwareVersion", self._bat.firmwareVersion)
@@ -79,7 +111,31 @@ class DbusBatteryService:
         self._dbusservice.add_path("/Connected", 0)
         # Create battery specific objects
         self._dbusservice.add_path("/State", 14, writeable=True)
-        self._dbusservice.add_path("/Mode", 1, writeable=True, onchangecallback=self._transmit_mode) 
+        self._dbusservice.add_path(
+            "/Mode",
+            self._bat.modeGuiKey[0],
+            writeable=True,
+            onchangecallback=self._transmit_mode,
+        )
+        # serialbattery compatible control, e.g. for dbus-bms-switcher. The U-BMS has one
+        # contactor for both directions: it is only opened when both are forced off,
+        # a single direction is blocked by reporting its current limit as 0.
+        # Both start at 1, matching standby, so writing 0 always triggers a change.
+        self._dbusservice.add_path("/Settings/HasSettings", 1)
+        self._dbusservice.add_path(
+            "/Settings/ForceChargingOff",
+            1,
+            writeable=True,
+            onchangecallback=self._force_off_changed,
+        )
+        self._dbusservice.add_path(
+            "/Settings/ForceDischargingOff",
+            1,
+            writeable=True,
+            onchangecallback=self._force_off_changed,
+        )
+        self._dbusservice.add_path("/Io/AllowToCharge", 0)
+        self._dbusservice.add_path("/Io/AllowToDischarge", 0)
         self._dbusservice.add_path("/Soh", 100)
         self._dbusservice.add_path("/Capacity", int(capacity))
         self._dbusservice.add_path("/InstalledCapacity", int(capacity))
@@ -97,7 +153,7 @@ class DbusBatteryService:
         self._dbusservice.add_path("/Alarms/LowTemperature", 0)
         self._dbusservice.add_path("/Alarms/HighTemperature", 0)
         self._dbusservice.add_path("/Balancing", 0)
-        self._dbusservice.add_path("/System/HasTemperature", 1)
+        self._dbusservice.add_path("/Settings/HasTemperature", 1)
         self._dbusservice.add_path("/System/NrOfBatteries", self._bat.numberOfModules)
         self._dbusservice.add_path(
             "/System/NrOfModulesOnline", self._bat.numberOfModules
@@ -113,6 +169,11 @@ class DbusBatteryService:
         self._dbusservice.add_path(
             "/System/NrOfCellsPerBattery", self._bat.cellsPerModule
         )
+        # module identities, read once at startup (0x184)
+        for m in range(1, self._bat.numberOfModules + 1):
+            self._dbusservice.add_path("/Modules/%d/Serial" % m, None)
+            self._dbusservice.add_path("/Modules/%d/Model" % m, None)
+        self._moduleInfoPublished = False
         self._dbusservice.add_path("/System/MinVoltageCellId", "M_C_")
         self._dbusservice.add_path("/System/MaxVoltageCellId", "M_C_")
         self._dbusservice.add_path("/System/MinCellTemperature", 10.0)
@@ -134,10 +195,13 @@ class DbusBatteryService:
                     writeable=True,
                     gettextcallback=lambda p, v: "{:0.3f}V".format(v),
                 )
-                if BATTERY_CELL_DATA_FORMAT & 1:
-                    self._dbusservice.add_path(
-                        "/Balances/Cell%s" % (str(i)), None, writeable=True
-                    )
+                # serialbattery compatible /Balances/Cell<n>: 1 = cell is balancing, 0 = not.
+                # Not published: the U-BMS only reports balancing per pack (/Balancing) and
+                # the number of modules balancing, not per cell.
+                # if BATTERY_CELL_DATA_FORMAT & 1:
+                #     self._dbusservice.add_path(
+                #         "/Balances/Cell%s" % (str(i)), None, writeable=True
+                #     )
             pathbase = "Cell" if (BATTERY_CELL_DATA_FORMAT & 2) else "Voltages"
             self._dbusservice.add_path(
                 "/%s/Sum" % pathbase,
@@ -190,10 +254,10 @@ class DbusBatteryService:
         self._dbusservice["/History/TotalAhDrawn"] = self._settings["TotalAhDrawn"]
         self._dbusservice.add_path("/History/TimeSinceLastFullCharge", 0)
         self._dbusservice.add_path(
-            "/History/MinCellVoltage", self._settings["MinCellVoltage"]
+            "/History/MinimumCellVoltage", self._settings["MinCellVoltage"]
         )
         self._dbusservice.add_path(
-            "/History/MaxCellVoltage", self._settings["MaxCellVoltage"]
+            "/History/MaximumCellVoltage", self._settings["MaxCellVoltage"]
         )
         self._dbusservice["/ConsumedAmphours"] = 0
 
@@ -208,7 +272,12 @@ class DbusBatteryService:
         self._dbusservice["/History/DischargedEnergy"] = 0
 
         self._dbusservice.register()
-        GLib.timeout_add(self._settings["interval"], exit_on_error, self._update)
+        GLib.timeout_add(self._settings["interval"], self._safe_update)
+        logging.info(
+            "Starting in standby, checking in %ds whether the contactor can be closed",
+            startup_delay,
+        )
+        GLib.timeout_add_seconds(startup_delay, self._safe_startup_check)
 
     def _gettext(self, path, value):
         item = self._summeditems.get(path)
@@ -218,10 +287,205 @@ class DbusBatteryService:
 
     def _transmit_mode(self, path, value):
         # translate values coming from GUI/dbus to U-BMS values
+        # returning True accepts the new value on dbus, False rejects it
         mode = self._bat.guiModeKey.get(value)
+        if mode is None:
+            logging.warning(
+                "Unsupported /Mode value %s, use 3 (on/drive) or 252 (standby)", value
+            )
+            return False
 
-        if self._bat.set_mode(mode) is True:
-            self._dbusservice[path] = value
+        self._cancel_startup_check(path)
+        if not self._bat.set_mode(mode):
+            return False
+        # /Mode itself is set by velib after returning True
+        self._set_force_off_flags(mode)
+        return True
+
+    def _force_off_changed(self, path, value):
+        if value not in (0, 1):
+            return False
+
+        self._cancel_startup_check(path)
+        flags = {
+            p: self._dbusservice[p]
+            for p in ("/Settings/ForceChargingOff", "/Settings/ForceDischargingOff")
+        }
+        flags[path] = value
+        # contactor only opens when both directions are forced off
+        mode = 0 if all(flags.values()) else 2
+        if not self._bat.set_mode(mode):
+            return False
+
+        self._dbusservice["/Mode"] = self._bat.modeGuiKey[mode]
+        logging.info(
+            "%s set to %d, U-BMS %s mode", path, value, self._bat.opModes[mode]
+        )
+        return True
+
+    def _set_force_off_flags(self, mode):
+        flag = 1 if mode == 0 else 0
+        self._dbusservice["/Settings/ForceChargingOff"] = flag
+        self._dbusservice["/Settings/ForceDischargingOff"] = flag
+
+    def _cancel_startup_check(self, path):
+        # an explicit request (e.g. by a BMS switcher) overrides the startup check
+        if self._startupCheckPending:
+            logging.info("%s set via dbus, cancelling startup check", path)
+            self._startupCheckPending = False
+
+    # --- startup check: close the contactor only if that is safe ---
+
+    # service types that report the voltage of the DC bus on /Dc/0/Voltage
+    DC_SOURCE_TYPES = (
+        "battery",
+        "vebus",
+        "multi",
+        "inverter",
+        "solarcharger",
+        "charger",
+        "dcdc",
+        "alternator",
+        "dcsource",
+    )
+    DC_ENERGIZED_MIN = 5.0  # V, below this the DC bus is considered dead
+    # range of DC voltages (relative to the configured max charge voltage) this pack can operate at
+    DC_RANGE = (0.65, 1.05)
+
+    def _get_value(self, service, path):
+        try:
+            value = self._dbusservice.dbusconn.call_blocking(
+                service, path, "com.victronenergy.BusItem", "GetValue", "", [],
+                timeout=2,
+            )
+        except dbus.exceptions.DBusException:
+            return None
+        if isinstance(value, dbus.Array) and len(value) == 0:
+            return None  # invalid value
+        return value
+
+    def _other_services(self):
+        return [
+            str(n)
+            for n in self._dbusservice.dbusconn.list_names()
+            if n.startswith("com.victronenergy.") and n != self._dbusservice.name
+        ]
+
+    def _in_standby(self, service):
+        return self._get_value(service, "/State") == 14 or self._get_value(
+            service, "/Mode"
+        ) == 252
+
+    def _other_active_bms(self):
+        candidates = [
+            n for n in self._other_services() if n.split(".")[2] == "battery"
+        ]
+        bms = self._get_value("com.victronenergy.system", "/ActiveBmsService")
+        if bms and str(bms) != self._dbusservice.name and str(bms) not in candidates:
+            candidates.append(str(bms))
+
+        active = []
+        for name in candidates:
+            # a battery service without charge voltage limit is a monitor (e.g. shunt), not a BMS
+            if self._get_value(name, "/Info/MaxChargeVoltage") is None:
+                continue
+            if self._get_value(name, "/Connected") == 0 or self._in_standby(name):
+                continue
+            active.append(name)
+        return active
+
+    def _dc_bus_voltages(self):
+        readings = {}
+        for name in self._other_services():
+            stype = name.split(".")[2]
+            if stype not in self.DC_SOURCE_TYPES:
+                continue
+            # a pack in standby is disconnected, its voltage is not the bus voltage
+            if stype == "battery" and self._in_standby(name):
+                continue
+            v = self._get_value(name, "/Dc/0/Voltage")
+            if v is not None:
+                readings[name] = float(v)
+        return readings
+
+    def _safe_startup_check(self):
+        try:
+            return self._startup_check()
+        except Exception:
+            logging.exception("Startup check failed, staying in standby")
+            self._startupCheckPending = False
+            return False
+
+    def _startup_check(self):
+        if not self._startupCheckPending:
+            return False
+
+        packVoltage = self._bat.voltage
+        if self._dbusservice["/Connected"] != 1 or packVoltage <= 0:
+            logging.info(
+                "Startup check: waiting for U-BMS data (connected %s, pack voltage %.2fV)",
+                self._dbusservice["/Connected"],
+                packVoltage,
+            )
+            return True  # retry after another startup delay
+
+        vMax = self._bat.maxChargeVoltage
+        vLow, vHigh = self.DC_RANGE[0] * vMax, self.DC_RANGE[1] * vMax
+        reasons = []
+
+        if not vLow <= packVoltage <= vHigh:
+            reasons.append(
+                "pack voltage %.2fV does not fit configured max charge voltage %.1fV"
+                % (packVoltage, vMax)
+            )
+
+        others = self._other_active_bms()
+        if others:
+            reasons.append("other BMS active: %s" % ", ".join(others))
+
+        for name, v in self._dc_bus_voltages().items():
+            if v < self.DC_ENERGIZED_MIN:
+                continue
+            if not vLow <= v <= vHigh:
+                reasons.append(
+                    "DC voltage %.2fV of %s outside %.1f-%.1fV range of this pack"
+                    % (v, name, vLow, vHigh)
+                )
+            elif abs(v - packVoltage) > self._maxVoltageDelta:
+                reasons.append(
+                    "DC voltage %.2fV of %s differs from pack voltage %.2fV by more than %.1fV"
+                    % (v, name, packVoltage, self._maxVoltageDelta)
+                )
+
+        self._startupCheckPending = False
+        if reasons:
+            for r in reasons:
+                logging.warning("Staying in standby: %s", r)
+            return False
+
+        logging.info(
+            "Startup check passed at pack voltage %.2fV, closing contactor", packVoltage
+        )
+        if self._bat.set_mode(2):
+            self._dbusservice["/Mode"] = self._bat.modeGuiKey[2]
+            self._set_force_off_flags(2)
+        return False
+
+    def _safe_update(self):
+        # replaces velib's exit_on_error, which exits via os._exit() without any cleanup
+        try:
+            return self._update()
+        except:  # noqa: E722
+            logging.exception("Exception in update loop, exiting")
+            self.shutdown()
+            os._exit(1)
+
+    def shutdown(self):
+        try:
+            self._safe_history()
+        except Exception:
+            logging.exception("Failed to save history")
+        self._bat.shutdown()
 
     def __del__(self):
         self._safe_history()
@@ -231,8 +495,8 @@ class DbusBatteryService:
         logging.debug("Saving history to localsettings")
         self._settings["AvgDischarge"] = self._dbusservice["/History/AverageDischarge"]
         self._settings["TotalAhDrawn"] = self._dbusservice["/History/TotalAhDrawn"]
-        self._settings["MinCellVoltage"] = self._dbusservice["/History/MinCellVoltage"]
-        # self._settings['MaxCellVoltage'] = self._dbusservice['/History/MaxCellVoltage']
+        self._settings["MinCellVoltage"] = self._dbusservice["/History/MinimumCellVoltage"]
+        self._settings["MaxCellVoltage"] = self._dbusservice["/History/MaximumCellVoltage"]
 
     def _daily_stats(self):
         if self._dbusservice["/History/DischargedEnergy"] == 0:
@@ -269,13 +533,11 @@ class DbusBatteryService:
         self.dailyResetDone = datetime.now().day
 
     def _update(self):
-        if (self._bat.updated != -1 and self.lastUpdated == 0) or (
-            (self._bat.updated - self.lastUpdated) < 10
-        ):
-            self.lastUpdated = self._bat.updated
-            self._dbusservice["/Connected"] = 1
-        else:
-            self._dbusservice["/Connected"] = 0
+        # connected while U-BMS status messages are less than 10s old
+        lastStatus = self._bat.lastStatusTime
+        self._dbusservice["/Connected"] = (
+            1 if lastStatus > 0 and time() - lastStatus < 10 else 0
+        )
 
         #       self._dbusservice['/Alarms/CellImbalance'] = (self._bat.internalErrors & 0x20)>>5
         deltaCellVoltage = self._bat.maxCellVoltage - self._bat.minCellVoltage
@@ -366,6 +628,29 @@ class DbusBatteryService:
         self._dbusservice["/Dc/0/Power"] = power
         self._dbusservice["/Dc/0/Temperature"] = self._bat.maxCellTemperature
 
+        # in standby the contactor is open, so the battery can neither be charged nor
+        # discharged, otherwise a direction may be blocked by its force off flag
+        bmsMode = self._bat.mode & 0x3
+        allowCharge = bmsMode != 0 and not self._dbusservice["/Settings/ForceChargingOff"]
+        allowDischarge = (
+            bmsMode == 2 and not self._dbusservice["/Settings/ForceDischargingOff"]
+        )
+        self._dbusservice["/Io/AllowToCharge"] = 1 if allowCharge else 0
+        self._dbusservice["/Io/AllowToDischarge"] = 1 if allowDischarge else 0
+        self._dbusservice["/Info/MaxChargeCurrent"] = (
+            self._bat.maxChargeCurrent if allowCharge else 0
+        )
+        self._dbusservice["/Info/MaxDischargeCurrent"] = (
+            self._bat.maxDischargeCurrent if allowDischarge else 0
+        )
+
+        if not self._moduleInfoPublished and self._bat._startupInfoDone:
+            self._moduleInfoPublished = True
+            for m, serial in self._bat.moduleSerial.items():
+                if "/Modules/%d/Serial" % m in self._dbusservice:
+                    self._dbusservice["/Modules/%d/Serial" % m] = serial
+                    self._dbusservice["/Modules/%d/Model" % m] = self._bat.moduleModel[m]
+
         # only update the below every 20s to reduce load
         if datetime.now().second not in [0, 20, 40]:
             return True
@@ -402,7 +687,6 @@ class DbusBatteryService:
                 voltage = flatVList[i] / 1000.0
                 cellpath = "/Voltages/Cell%s"
                 self._dbusservice[cellpath % (str(i + 1))] = voltage
-                self._dbusservice["/Balances/Cell%s" % (str(i + 1))] = voltage
                 if voltage and i < self._bat.cellsPerModule * self._bat.modulesInSeries:
                     voltageSum += voltage
             self._dbusservice["/Voltages/Sum"] = voltageSum
@@ -412,18 +696,16 @@ class DbusBatteryService:
         except Exception:
             pass
 
-        if self._bat.maxCellVoltage > self._dbusservice["/History/MaxCellVoltage"]:
-            self._dbusservice["/History/MaxCellVoltage"] = self._bat.maxCellVoltage
+        if self._bat.maxCellVoltage > self._dbusservice["/History/MaximumCellVoltage"]:
+            self._dbusservice["/History/MaximumCellVoltage"] = self._bat.maxCellVoltage
             logging.debug("New maximum cell voltage: %f", self._bat.maxCellVoltage)
 
-        if 0 < self._bat.minCellVoltage < self._dbusservice["/History/MinCellVoltage"]:
-            self._dbusservice["/History/MinCellVoltage"] = self._bat.minCellVoltage
+        if 0 < self._bat.minCellVoltage < self._dbusservice["/History/MinimumCellVoltage"]:
+            self._dbusservice["/History/MinimumCellVoltage"] = self._bat.minCellVoltage
             logging.debug("New minimum cell voltage: %f", self._bat.minCellVoltage)
         self._dbusservice["/System/MinCellTemperature"] = self._bat.minCellTemperature
         self._dbusservice["/System/MaxCellTemperature"] = self._bat.maxCellTemperature
         self._dbusservice["/System/MaxPcbTemperature"] = self._bat.maxPcbTemperature
-        self._dbusservice["/Info/MaxChargeCurrent"] = self._bat.maxChargeCurrent
-        self._dbusservice["/Info/MaxDischargeCurrent"] = self._bat.maxDischargeCurrent
         self._dbusservice["/Info/MaxChargeVoltage"] = self._bat.maxChargeVoltage
         self._dbusservice["/System/NrOfModulesOnline"] = (
             self._bat.numberOfModulesCommunicating
@@ -508,6 +790,20 @@ def main():
     parser.add_argument("-c", "--capacity", help="capacity in Ah")
     parser.add_argument("-v", "--voltage", help="maximum charge voltage V")
     parser.add_argument("-p", "--print", help="print only")
+    parser.add_argument(
+        "--startup-delay",
+        help="seconds in standby before checking whether the contactor can be closed "
+        "(default 10), use different values for several U-BMS in one system",
+        type=int,
+        default=10,
+    )
+    parser.add_argument(
+        "--max-voltage-delta",
+        help="maximum difference between DC bus and pack voltage to close the "
+        "contactor on startup in V (default 1.0)",
+        type=float,
+        default=1.0,
+    )
 
     args = parser.parse_args()
 
@@ -540,19 +836,48 @@ def main():
         gobject.threads_init()
     DBusGMainLoop(set_as_default=True)
 
-    DbusBatteryService(
+    # Until the main loop runs, turn termination signals into a regular exit,
+    # so the atexit handler of UbmsBattery puts the U-BMS into standby.
+    # SIGINT already raises KeyboardInterrupt.
+    def _raise_exit(signum, frame):
+        raise SystemExit(128 + signum)
+
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _raise_exit)
+
+    service = DbusBatteryService(
         servicename="com.victronenergy.battery",
         connection=args.interface,
         deviceinstance=0,
         capacity=int(args.capacity),
         voltage=float(args.voltage),
+        startup_delay=args.startup_delay,
+        max_voltage_delta=args.max_voltage_delta,
     )
 
     logging.debug(
         "Connected to dbus, and switching over to GLib.MainLoop() (= event based)"
     )
     mainloop = GLib.MainLoop()
-    mainloop.run()
+
+    def _quit(signame):
+        logging.info("Received %s, stopping", signame)
+        mainloop.quit()
+        return GLib.SOURCE_REMOVE
+
+    for sig, name in (
+        (signal.SIGTERM, "SIGTERM"),
+        (signal.SIGINT, "SIGINT"),
+        (signal.SIGHUP, "SIGHUP"),
+    ):
+        GLib.unix_signal_add(GLib.PRIORITY_HIGH, sig, _quit, name)
+
+    try:
+        mainloop.run()
+    finally:
+        # leave the U-BMS in standby, i.e. contactor open
+        service.shutdown()
+        logging.info("Stopped dbus_ubms")
 
 
 if __name__ == "__main__":

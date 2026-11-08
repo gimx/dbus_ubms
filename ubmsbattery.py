@@ -7,15 +7,24 @@ In order for this to work the first x modules of a xSyP pack should have assigne
 The BMS should be operated in slave mode, VMU packages are being sent
 
 """
+import atexit
 import logging
-import can
-import struct
+import os
+import sys
+import time
+
+# use the bundled python-can (see ext/VENDORED.md) also when run standalone
+sys.path.insert(1, os.path.join(os.path.dirname(__file__), "ext"))
+import can  # noqa: E402
+import struct  # noqa: E402
 
 
 class UbmsBattery(can.Listener):
     opModes = {0: "Standby", 1: "Charge", 2: "Drive"}
 
+    # Victron /Mode values (252 = standby, 3 = on) to U-BMS mode and back
     guiModeKey = {252: 0, 3: 2}
+    modeGuiKey = {0: 252, 2: 3}
 
     opState = {0: 14, 1: 9, 2: 9}
     # Victron BMS states
@@ -29,7 +38,12 @@ class UbmsBattery(can.Listener):
     #  16 pre-charge
     #  17 contactor check
 
-    def __init__(self, voltage, capacity, connection):
+    def __init__(self, voltage, capacity, connection, start_mode=2):
+        """start_mode: U-BMS mode commanded from the very first VMU message,
+        2 = drive (contactor closed), 0 = standby (hot standby, contactor open)"""
+        if start_mode not in self.opModes:
+            raise ValueError("Invalid start mode %r" % start_mode)
+
         self.capacity = capacity
         self.maxChargeVoltage = voltage
         self.numberOfModules = 8
@@ -58,6 +72,15 @@ class UbmsBattery(can.Listener):
         self.moduleCurrent = [0 for i in range(self.numberOfModules)]
         self.moduleSoc = [0 for i in range(self.numberOfModules)]
         self.moduleTemp = [0 for i in range(self.numberOfModules)]
+        # second temperature per module (0x67x), decoded in the cyclic path but not in
+        # the CAN filters, add {"can_id": 0x67A, "can_mask": 0xFF0} to receive it
+        self.moduleTemp2 = [None for i in range(self.numberOfModules)]
+        # read once at startup only (0x184), not part of the cyclic filters
+        self.moduleModel = {}  # module number (1..n) -> model string, e.g. "Cerizay_U27"
+        self.moduleSerial = {}  # module number (1..n) -> serial, e.g. "4049"
+        self._moduleIdPages = {}  # module number -> {page: payload}
+        self._startupInfoDone = False
+        self._startupInfoDeadline = 0
         self.maxCellVoltage = 3.2
         self.minCellVoltage = 3.2
         self.maxChargeCurrent = 5.0
@@ -69,7 +92,11 @@ class UbmsBattery(can.Listener):
         self.numberOfModulesBalancing = 0
         self.numberOfModulesCommunicating = 0
         self.updated = -1
+        self.lastStatusTime = 0
         self.cyclicModeTask = None
+        self.commandedMode = None
+        self._notifier = None
+        self._shutdownDone = False
 
         self._ci = can.interface.Bus(
             channel=connection,
@@ -81,20 +108,34 @@ class UbmsBattery(can.Listener):
         )
 
         if self._connect_and_verify(connection):
-            # Now that we've confirmed connection, update filters for normal operation
-            self._set_operational_filters()
-            
-            # Create the periodic message task
-            msg = can.Message(
-                arbitration_id=0x440, data=[0, 2, 0, 0], is_extended_id=False
-            )  # default: drive mode
-            self.cyclicModeTask = self._ci.send_periodic(msg, 1)
-        
+            # Now that we've confirmed connection, update filters for normal operation,
+            # plus the module identity messages read once at startup
+            self._startupInfoDeadline = time.time() + self.STARTUP_INFO_TIMEOUT
+            self._set_operational_filters(startup=True)
+
+            # create a cyclic mode command message simulating a VMU master
+            # a U-BMS in slave mode according to manual section 6.4.1 switches to standby
+            # after 20 seconds of not receiving it
+            self.commandedMode = start_mode
+            self.cyclicModeTask = self._ci.send_periodic(
+                self._mode_message(start_mode), 1
+            )
+            # leave the BMS in standby on any regular interpreter exit,
+            # including uncaught exceptions and sys.exit()
+            atexit.register(self.shutdown)
+            logging.info("Commanding U-BMS %s mode", self.opModes[start_mode])
+
             # Set up the notifier for message callbacks
-            notifier = can.Notifier(self._ci, [self])
+            self._notifier = can.Notifier(self._ci, [self])
 
         else:
             logging.error("Failed to connect to a supported Valence U-BMS")
+
+    @staticmethod
+    def _mode_message(mode):
+        return can.Message(
+            arbitration_id=0x440, data=[0, mode, 0, 0], is_extended_id=False
+        )
     
     def _connect_and_verify(self, connection):
         # check connection, BMS type and that reported system voltage roughly matches configuration
@@ -137,15 +178,16 @@ class UbmsBattery(can.Listener):
             elif msg.arbitration_id == 0xC1 and found & 1 == 0:
                 # check pack voltage
                 if (
-                    abs(2 * msg.data[0] - self.maxChargeVoltage)
+                    # requires U-BMS voltage scaling factor 1, see README
+                    abs(msg.data[0] - self.maxChargeVoltage)
                     > 0.15 * self.maxChargeVoltage
                 ):
                     logging.error(
-                        "Pack voltage of %dV differs significantly from configured max charge voltage %dV.",
+                        "Pack voltage of %dV differs significantly from configured max charge voltage %.1fV.",
                         msg.data[0],
                         self.maxChargeVoltage,
                     )
-                    found = found | 1
+                found = found | 1
 
             elif msg.arbitration_id == 0x180 and found & 4 == 0:
                 self.firmwareVersion = msg.data[0]
@@ -162,23 +204,15 @@ class UbmsBattery(can.Listener):
 
                 found = found | 4
 
-        if found == 7:
-
-            # msg = can.Message(arbitration_id=0x440, data=[0, self.opMode.get("Standby"), 0, 0], extended_id=False)
-
-            # create a cyclic mode command message simulating a VMU master
-            # a U-BMS in slave mode according to manual section 6.4.1 switches to standby
-            # after 20 seconds of not receiving it
-            msg = can.Message(
-                arbitration_id=0x440, data=[0, 2, 0, 0], is_extended_id=False
-            )  # default: drive mode
-
-            self.cyclicModeTask = self._ci.send_periodic(msg, 1)
-            notifier = can.Notifier(self._ci, [self])
-
         return found == 7
 
-    def _set_operational_filters(self):
+    # max time to collect module identities (0x184)
+    STARTUP_INFO_TIMEOUT = 30
+    STARTUP_FILTERS = [
+        {"can_id": 0x184, "can_mask": 0xFFF},  # module identity: model, serial
+    ]
+
+    def _set_operational_filters(self, startup=False):
         # Set up filters for the messages we want to receive
         filters = [
             {"can_id": 0x0CF, "can_mask": 0xFF0},  
@@ -186,8 +220,10 @@ class UbmsBattery(can.Listener):
             {"can_id": 0x360, "can_mask": 0xFF0},
             {"can_id": 0x46A, "can_mask": 0xFF0},
             {"can_id": 0x06A, "can_mask": 0xFF0},
-            {"can_id": 0x76A, "can_mask": 0xFF0},  
+            {"can_id": 0x76A, "can_mask": 0xFF0},
         ]
+        if startup:
+            filters = filters + self.STARTUP_FILTERS
         self._ci.set_filters(filters)
 
     def on_message_received(self, msg):
@@ -207,6 +243,8 @@ class UbmsBattery(can.Listener):
                 self.numberOfModules = self.numberOfModulesCommunicating
 
             self.numberOfModulesBalancing = msg.data[6]
+            # set last, shutdown() relies on mode being current when this changes
+            self.lastStatusTime = time.time()
 
             if (self.shutdownReason == 0 and msg.data[7] != 0) or self.shutdownReason != msg.data[7]:
                 logging.warning("Shutdown reason 0x%x", msg.data[7])
@@ -328,61 +366,198 @@ class UbmsBattery(can.Listener):
                 self.moduleTemp[iStart + 1] = ((msg.data[4] * 256) + msg.data[5]) * 0.01
             if msg.dlc > 7: 
                 self.moduleTemp[iStart + 2] = ((msg.data[6] * 256) + msg.data[7]) * 0.01
-            # logging.debug("Tmodule %s", ",".join(str(x) for x in self.moduleTemp))   
+            # logging.debug("Tmodule %s", ",".join(str(x) for x in self.moduleTemp))
 
-    # change operational mode of the BMS, valid values see opModes (accepting strings and numbers)
+        elif msg.arbitration_id == 0x184 and not self._startupInfoDone:
+            # module identity, 3 pages per module: byte 0 module number (0xFF = unused),
+            # byte 1 page; pages 1+2 model string, page 3 bytes 2-3 serial (meaning of
+            # bytes 4-7 unknown)
+            module, page = msg.data[0], msg.data[1]
+            if module != 0xFF and page in (1, 2, 3):
+                self._moduleIdPages.setdefault(module, {})[page] = bytes(
+                    msg.data[2 : msg.dlc]
+                )
+                pages = self._moduleIdPages[module]
+                if len(pages) == 3 and module not in self.moduleSerial:
+                    self.moduleModel[module] = (
+                        (pages[1] + pages[2]).split(b"\0")[0].decode("ascii", "replace")
+                    )
+                    self.moduleSerial[module] = pages[3][0:2].hex().upper()
+                    logging.debug(
+                        "Module %d: %s, serial %s, page 3 %s",
+                        module,
+                        self.moduleModel[module],
+                        self.moduleSerial[module],
+                        pages[3].hex().upper(),
+                    )
+
+        elif msg.arbitration_id in [0x67A, 0x67B, 0x67C, 0x67D]:
+            # second temperature per module, same layout as 0x76x
+            # (not in the CAN filters, see moduleTemp2)
+            iStart = (msg.arbitration_id - 0x67A) * 3
+            for k, pos in enumerate(range(2, msg.dlc - 1, 2)):
+                if iStart + k < len(self.moduleTemp2):
+                    self.moduleTemp2[iStart + k] = (
+                        (msg.data[pos] * 256) + msg.data[pos + 1]
+                    ) * 0.01
+
+        if not self._startupInfoDone and self._startupInfoDeadline:
+            self._check_startup_info()
+
+    def _check_startup_info(self):
+        modules = self.numberOfModulesCommunicating or self.numberOfModules
+        identitiesComplete = len(self.moduleSerial) >= modules
+        timedOut = time.time() > self._startupInfoDeadline
+        if not (identitiesComplete or timedOut):
+            return
+
+        self._startupInfoDone = True
+        self._set_operational_filters()
+
+        for m in sorted(self.moduleSerial):
+            logging.info(
+                "Module %d: %s, serial %s",
+                m,
+                self.moduleModel[m],
+                self.moduleSerial[m],
+            )
+        if timedOut:
+            logging.warning(
+                "Module identities incomplete after %ds: %d of %d",
+                self.STARTUP_INFO_TIMEOUT,
+                len(self.moduleSerial),
+                modules,
+            )
+
+        # check the module count configured in the driver against the modules found
+        found = sorted(self.moduleSerial)
+        if len(found) != self.numberOfStrings * self.modulesInSeries:
+            logging.warning(
+                "Found %d modules (%s), driver is configured for %d (%dS%dP)",
+                len(found),
+                ",".join(str(m) for m in found),
+                self.numberOfStrings * self.modulesInSeries,
+                self.modulesInSeries,
+                self.numberOfStrings,
+            )
+        elif found != list(range(1, len(found) + 1)):
+            logging.warning(
+                "Module numbers %s are not consecutive from 1, pack voltage needs "
+                "modules 1 to %d in one string",
+                ",".join(str(m) for m in found),
+                self.modulesInSeries,
+            )
+        else:
+            logging.info(
+                "All %d configured modules identified (%dS%dP)",
+                len(found),
+                self.modulesInSeries,
+                self.numberOfStrings,
+            )
+
+    # change operational mode of the BMS, valid values see opModes
     # transition between charge and drive only via standby(1-0-2)
     def set_mode(self, mode):
-
-        if not mode in [0, 1, 2]:
-            logging.warning("Invalid mode requested %s " % str(value))
+        if mode not in self.opModes:
+            logging.warning("Invalid mode requested: %s", mode)
             return False
- 
-        if not isinstance(self.cyclicModeTask, can.ModifiableCyclicTaskABC):
-            msg = can.Message(arbitration_id=0x440, data=[0, mode, 0, 0], extended_id=False)
-            self.cyclicModeTask.modify(msg)
-            
+
+        if self.cyclicModeTask is None or self._shutdownDone:
+            logging.warning(
+                "Cannot change to %s mode, U-BMS not connected", self.opModes[mode]
+            )
+            return False
+
+        if mode == self.commandedMode:
+            return True
+
+        if mode != 0 and self.commandedMode != 0:
+            logging.warning(
+                "Change from %s to %s mode has to go via standby",
+                self.opModes[self.commandedMode],
+                self.opModes[mode],
+            )
+            return False
+
+        msg = self._mode_message(mode)
+        if isinstance(self.cyclicModeTask, can.ModifiableCyclicTaskABC):
+            self.cyclicModeTask.modify_data(msg)
         else:
             self.cyclicModeTask.stop()
-            msg = can.Message(arbitration_id=0x440, data=[0, mode, 0, 0], extended_id=False)
             self.cyclicModeTask = self._ci.send_periodic(msg, 1)
+        # apply right away instead of waiting up to one period
+        self._ci.send(msg)
 
-        logging.info("Changed mode to %s" % self.opModes[mode])
+        self.commandedMode = mode
+        logging.info("Changed mode to %s", self.opModes[mode])
         return True
+
+    def shutdown(self, timeout=3.0):
+        """Leave the U-BMS in standby (contactor open) and release the CAN bus.
+
+        Sends the standby command repeatedly until a status message confirms it
+        or the timeout expires. Safe to call more than once. If the process dies
+        without getting here (SIGKILL, power loss) the U-BMS falls back to
+        standby by itself about 20s after the last mode command.
+        """
+        if self._shutdownDone:
+            return
+        self._shutdownDone = True
+
+        try:
+            if self.cyclicModeTask is not None:
+                self.cyclicModeTask.stop()
+                self.commandedMode = 0
+                msg = self._mode_message(0)
+                requested = time.time()
+                confirmed = False
+                while time.time() - requested < timeout:
+                    try:
+                        self._ci.send(msg)
+                    except can.CanError as e:
+                        logging.error("Failed to send standby command: %s", e)
+                    time.sleep(0.2)
+                    if self.lastStatusTime > requested and self.mode & 0x3 == 0:
+                        confirmed = True
+                        break
+
+                if confirmed:
+                    logging.info("U-BMS confirmed standby mode, contactor open")
+                else:
+                    logging.error(
+                        "U-BMS did not confirm standby within %.0fs, it will fall back "
+                        "to standby about 20s after the last mode command",
+                        timeout,
+                    )
+        finally:
+            if self._notifier is not None:
+                self._notifier.stop()
+            self._ci.shutdown()
 
 
 # === All code below is to simply run it from the commandline for debugging purposes ===
 def main():
-
-    #       logger = can.Logger('logfile.asc')
-
-    bat = UbmsBattery(capacity=650, voltage=29.0, connection="can0")
-
-    listeners = [
-        #               logger,          # Regular Listener object
-        bat
-    ]
-
-    notifier = can.Notifier(bat._ci, listeners)
-    
-    # print out some info about the BMS
-    logging.info("BMS type: %d", bat.bms_type)
-    logging.info("Firmware version: %d", bat.firmwareVersion)
-    logging.info("Hardware version: %d", bat.hw_rev)
-
-    logging.info("Number of modules: %d", bat.numberOfModules)
-    logging.info("Module SOCs: %s", bat.moduleSoc)
-    logging.info("Max cell voltage: %1.3fV", bat.maxCellVoltage)
-    logging.info("Min cell voltage: %1.3fV", bat.minCellVoltage)
-    logging.info("Cell voltages:")
-    for i in range(bat.numberOfModules):
-        logging.info("Module %d: %s", i, bat.cellVoltages[i])  
-
-    # Clean-up
-    notifier.stop()
-    bat._ci.shutdown()
-
     logging.basicConfig(format="%(levelname)-8s %(message)s", level=(logging.DEBUG))
+
+    # start in standby, this is only for reading data
+    bat = UbmsBattery(capacity=650, voltage=29.0, connection="can0", start_mode=0)
+    try:
+        time.sleep(3)
+
+        # print out some info about the BMS
+        logging.info("BMS type: %d", bat.bms_type)
+        logging.info("Firmware version: %d", bat.firmwareVersion)
+        logging.info("Hardware version: %d", bat.hw_rev)
+
+        logging.info("Number of modules: %d", bat.numberOfModules)
+        logging.info("Module SOCs: %s", bat.moduleSoc)
+        logging.info("Max cell voltage: %1.3fV", bat.maxCellVoltage)
+        logging.info("Min cell voltage: %1.3fV", bat.minCellVoltage)
+        logging.info("Cell voltages:")
+        for i in range(bat.numberOfModules):
+            logging.info("Module %d: %s", i, bat.cellVoltages[i])
+    finally:
+        bat.shutdown()
 
 
 if __name__ == "__main__":

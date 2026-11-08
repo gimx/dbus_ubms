@@ -13,15 +13,15 @@ with git:
 or download the above projects as archives, copy and unzip to root home
 ```
 
-## Preparation on Raspi
-```
- sudo apt-get install libgtk2.0-dev  libdbus-1-dev libgirepository1.0-dev python-gobject python-can
- sudo pip install dbus-python can pygobject
-```
+## Dependencies
+ python-can (with wrapt and typing_extensions) is bundled in ext/, see ext/VENDORED.md, so nothing has to be
+ installed on Venus OS and the driver keeps working after firmware updates (packages installed with opkg
+ are lost on every update). dbus-python and PyGObject are part of Venus OS.
 
-## Preparation on CCGX
+## Preparation on Raspi (development, not Venus OS)
 ```
- dbus_ubms/prep_ubms.sh
+ sudo apt-get install libgtk2.0-dev libdbus-1-dev libgirepository1.0-dev python3-gi
+ sudo pip install dbus-python pygobject
 ```
 
 ## Run from command line
@@ -37,6 +37,65 @@ or download the above projects as archives, copy and unzip to root home
  cp rc.local /data/rc.local
  svc -u /service/dbus-ubms.can0
 ```
+
+## Standby and startup check
+ The driver acts as VMU master and always starts with the U-BMS in standby mode, i.e. the contactor open,
+ while all data is read and published on dbus. While in standby /State is 14, /Mode is 252 and
+ /Info/MaxChargeCurrent and /Info/MaxDischargeCurrent are reported as 0.
+
+ After --startup-delay seconds (default 10) the driver checks on dbus whether the contactor can be closed.
+ It stays in standby and logs the reason if
+ - the pack voltage does not fit the configured max charge voltage (-v), or
+ - another BMS is active: a battery service with a charge voltage limit (/Info/MaxChargeVoltage) that is
+   connected and not in standby (/State 14 or /Mode 252), or the ActiveBmsService of the system, or
+ - the DC bus is energized (above 5V, as reported by other batteries not in standby, Multis/inverters,
+   chargers, solar chargers, DC-DC converters, ...) with a voltage outside the range of this pack (65-105%
+   of -v) or differing from the pack voltage by more than --max-voltage-delta (default 1.0V).
+ Otherwise it switches to drive mode and closes the contactor. The check is done once only; writing /Mode
+ before it ran (e.g. by a BMS switcher) cancels it.
+
+ Change the mode at any time by writing to /Mode, 3 closes the contactor (drive), 252 opens it (standby):
+```
+ dbus -y com.victronenergy.battery.socketcan_can0_di0 /Mode SetValue %3
+ dbus -y com.victronenergy.battery.socketcan_can0_di0 /Mode SetValue %252
+```
+
+ For compatibility with dbus-serialbattery (e.g. dbus-bms-switcher) the driver also provides
+ /Settings/ForceChargingOff, /Settings/ForceDischargingOff (writeable, 0/1) and /Io/AllowToCharge,
+ /Io/AllowToDischarge. The U-BMS has a single contactor for both directions, so it is opened (standby) only
+ when both are forced off. With just one direction forced off the contactor is closed (drive) and that
+ direction is blocked by reporting its current limit as 0. In standby both flags are 1, writing /Mode
+ sets both flags accordingly. /Io/AllowTo(Dis)Charge is 1 when the U-BMS reports a mode allowing it
+ and the direction is not forced off.
+
+ With several U-BMS in one system give each instance a different --startup-delay (at least 10s apart),
+ instances in standby do not see each other as active, so the first one closing must be visible on dbus
+ before the next one does its check.
+
+ The driver puts the U-BMS into standby (contactor open) whenever it stops: on SIGTERM/SIGINT/SIGHUP
+ (e.g. svc -d), on an unhandled exception and on any other regular exit. It waits up to 3s for the U-BMS
+ to confirm standby. If the process cannot clean up (SIGKILL, power loss) the U-BMS in VMU slave mode
+ falls back to standby by itself 20s after the last mode command.
+
+## GUI (gui-v2 UI plugin)
+ A gui-v2 UI plugin adds two pages, modelled after the dbus-serialbattery GUI, to the device page of
+ the U-BMS battery (Settings → Devices → the battery):
+ - U-BMS - General: voltage, current, power, SoC, cell/PCB temperatures, CVL/CCL/DCL, allow to
+   charge/discharge, modules online/offline/balancing and the Force charging/discharging off switches
+ - U-BMS - Cell Voltages: one row per module with each cell's voltage and deviation from the mean,
+   min cell in blue, max cell in red, plus sum, mean, min, max and diff (updated every 20s)
+
+ gui-v2 attaches the pages by product id: the driver publishes /ProductId 0xBA75. This id is
+ provisional and self-chosen, Victron has no public process for assigning ids to third-party drivers.
+ No Victron files are modified. The pages show in the remote console (tested on a Raspberry Pi with
+ Venus OS v3.80, gui-v2 web version). UI plugins need Venus OS v3.70~45 or later and are not officially
+ released functionality yet, so the plugin API may change.
+```
+ bash /data/dbus-ubms/gui-v2-install.sh            # install / update
+ bash /data/dbus-ubms/gui-v2-install.sh uninstall  # remove
+```
+ The compiled plugin `gui-v2/Ubms/Ubms.json` is committed. After editing the QML, rebuild it with
+ `bash gui-v2/build.sh` (needs python3 and Qt `rcc`) and commit the JSON.
 
 ## Configuration of U-BMS
 ```

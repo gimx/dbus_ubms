@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # Default settings
-DEFAULT_INTERFACE="can0"
+DEFAULT_INTERFACE="vcan0"
 INTERFACE=${1:-$DEFAULT_INTERFACE}
 INITIAL_VALUE=0
-INITIAL_INTERVAL=1  # Start with 1 second interval
+INITIAL_INTERVAL=5  # Start with 1 second interval
 DRY_RUN=true
 
 # Mode descriptions
