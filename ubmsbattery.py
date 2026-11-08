@@ -162,11 +162,12 @@ class UbmsBattery(can.Listener):
             elif msg.arbitration_id == 0xC1 and found & 1 == 0:
                 # check pack voltage
                 if (
-                    abs(2 * msg.data[0] - self.maxChargeVoltage)
+                    # requires U-BMS voltage scaling factor 1, see README
+                    abs(msg.data[0] - self.maxChargeVoltage)
                     > 0.15 * self.maxChargeVoltage
                 ):
                     logging.error(
-                        "Pack voltage of %dV differs significantly from configured max charge voltage %dV.",
+                        "Pack voltage of %dV differs significantly from configured max charge voltage %.1fV.",
                         msg.data[0],
                         self.maxChargeVoltage,
                     )
