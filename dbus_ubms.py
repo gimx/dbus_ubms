@@ -130,7 +130,7 @@ class DbusBatteryService:
         self._dbusservice.add_path("/Alarms/LowTemperature", 0)
         self._dbusservice.add_path("/Alarms/HighTemperature", 0)
         self._dbusservice.add_path("/Balancing", 0)
-        self._dbusservice.add_path("/System/HasTemperature", 1)
+        self._dbusservice.add_path("/Settings/HasTemperature", 1)
         self._dbusservice.add_path("/System/NrOfBatteries", self._bat.numberOfModules)
         self._dbusservice.add_path(
             "/System/NrOfModulesOnline", self._bat.numberOfModules
@@ -167,10 +167,13 @@ class DbusBatteryService:
                     writeable=True,
                     gettextcallback=lambda p, v: "{:0.3f}V".format(v),
                 )
-                if BATTERY_CELL_DATA_FORMAT & 1:
-                    self._dbusservice.add_path(
-                        "/Balances/Cell%s" % (str(i)), None, writeable=True
-                    )
+                # serialbattery compatible /Balances/Cell<n>: 1 = cell is balancing, 0 = not.
+                # Not published: the U-BMS only reports balancing per pack (/Balancing) and
+                # the number of modules balancing, not per cell.
+                # if BATTERY_CELL_DATA_FORMAT & 1:
+                #     self._dbusservice.add_path(
+                #         "/Balances/Cell%s" % (str(i)), None, writeable=True
+                #     )
             pathbase = "Cell" if (BATTERY_CELL_DATA_FORMAT & 2) else "Voltages"
             self._dbusservice.add_path(
                 "/%s/Sum" % pathbase,
@@ -223,10 +226,10 @@ class DbusBatteryService:
         self._dbusservice["/History/TotalAhDrawn"] = self._settings["TotalAhDrawn"]
         self._dbusservice.add_path("/History/TimeSinceLastFullCharge", 0)
         self._dbusservice.add_path(
-            "/History/MinCellVoltage", self._settings["MinCellVoltage"]
+            "/History/MinimumCellVoltage", self._settings["MinCellVoltage"]
         )
         self._dbusservice.add_path(
-            "/History/MaxCellVoltage", self._settings["MaxCellVoltage"]
+            "/History/MaximumCellVoltage", self._settings["MaxCellVoltage"]
         )
         self._dbusservice["/ConsumedAmphours"] = 0
 
@@ -464,8 +467,8 @@ class DbusBatteryService:
         logging.debug("Saving history to localsettings")
         self._settings["AvgDischarge"] = self._dbusservice["/History/AverageDischarge"]
         self._settings["TotalAhDrawn"] = self._dbusservice["/History/TotalAhDrawn"]
-        self._settings["MinCellVoltage"] = self._dbusservice["/History/MinCellVoltage"]
-        # self._settings['MaxCellVoltage'] = self._dbusservice['/History/MaxCellVoltage']
+        self._settings["MinCellVoltage"] = self._dbusservice["/History/MinimumCellVoltage"]
+        self._settings["MaxCellVoltage"] = self._dbusservice["/History/MaximumCellVoltage"]
 
     def _daily_stats(self):
         if self._dbusservice["/History/DischargedEnergy"] == 0:
@@ -649,7 +652,6 @@ class DbusBatteryService:
                 voltage = flatVList[i] / 1000.0
                 cellpath = "/Voltages/Cell%s"
                 self._dbusservice[cellpath % (str(i + 1))] = voltage
-                self._dbusservice["/Balances/Cell%s" % (str(i + 1))] = voltage
                 if voltage and i < self._bat.cellsPerModule * self._bat.modulesInSeries:
                     voltageSum += voltage
             self._dbusservice["/Voltages/Sum"] = voltageSum
@@ -659,12 +661,12 @@ class DbusBatteryService:
         except Exception:
             pass
 
-        if self._bat.maxCellVoltage > self._dbusservice["/History/MaxCellVoltage"]:
-            self._dbusservice["/History/MaxCellVoltage"] = self._bat.maxCellVoltage
+        if self._bat.maxCellVoltage > self._dbusservice["/History/MaximumCellVoltage"]:
+            self._dbusservice["/History/MaximumCellVoltage"] = self._bat.maxCellVoltage
             logging.debug("New maximum cell voltage: %f", self._bat.maxCellVoltage)
 
-        if 0 < self._bat.minCellVoltage < self._dbusservice["/History/MinCellVoltage"]:
-            self._dbusservice["/History/MinCellVoltage"] = self._bat.minCellVoltage
+        if 0 < self._bat.minCellVoltage < self._dbusservice["/History/MinimumCellVoltage"]:
+            self._dbusservice["/History/MinimumCellVoltage"] = self._bat.minCellVoltage
             logging.debug("New minimum cell voltage: %f", self._bat.minCellVoltage)
         self._dbusservice["/System/MinCellTemperature"] = self._bat.minCellTemperature
         self._dbusservice["/System/MaxCellTemperature"] = self._bat.maxCellTemperature
