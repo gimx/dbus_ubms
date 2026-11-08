@@ -9,9 +9,14 @@ The BMS should be operated in slave mode, VMU packages are being sent
 """
 import atexit
 import logging
+import os
+import sys
 import time
-import can
-import struct
+
+# use the bundled python-can (see ext/VENDORED.md) also when run standalone
+sys.path.insert(1, os.path.join(os.path.dirname(__file__), "ext"))
+import can  # noqa: E402
+import struct  # noqa: E402
 
 
 class UbmsBattery(can.Listener):
