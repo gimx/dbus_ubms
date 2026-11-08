@@ -72,6 +72,14 @@ class UbmsBattery(can.Listener):
         self.moduleCurrent = [0 for i in range(self.numberOfModules)]
         self.moduleSoc = [0 for i in range(self.numberOfModules)]
         self.moduleTemp = [0 for i in range(self.numberOfModules)]
+        # read once at startup only (0x184, 0x67x), not part of the cyclic filters
+        self.moduleTemp2 = [None for i in range(self.numberOfModules)]
+        self.moduleModel = {}  # module number (1..n) -> model string, e.g. "Cerizay_U27"
+        self.moduleSerial = {}  # module number (1..n) -> serial, e.g. "4049"
+        self._moduleIdPages = {}  # module number -> {page: payload}
+        self._moduleTemp2Frames = set()
+        self._startupInfoDone = False
+        self._startupInfoDeadline = 0
         self.maxCellVoltage = 3.2
         self.minCellVoltage = 3.2
         self.maxChargeCurrent = 5.0
@@ -99,8 +107,10 @@ class UbmsBattery(can.Listener):
         )
 
         if self._connect_and_verify(connection):
-            # Now that we've confirmed connection, update filters for normal operation
-            self._set_operational_filters()
+            # Now that we've confirmed connection, update filters for normal operation,
+            # plus the module identity and second temperature messages read once at startup
+            self._startupInfoDeadline = time.time() + self.STARTUP_INFO_TIMEOUT
+            self._set_operational_filters(startup=True)
 
             # create a cyclic mode command message simulating a VMU master
             # a U-BMS in slave mode according to manual section 6.4.1 switches to standby
@@ -195,7 +205,14 @@ class UbmsBattery(can.Listener):
 
         return found == 7
 
-    def _set_operational_filters(self):
+    # max time to collect module identities (0x184) and second temperatures (0x67x)
+    STARTUP_INFO_TIMEOUT = 30
+    STARTUP_FILTERS = [
+        {"can_id": 0x184, "can_mask": 0xFFF},  # module identity: model, serial
+        {"can_id": 0x67A, "can_mask": 0xFF0},  # second temperature per module
+    ]
+
+    def _set_operational_filters(self, startup=False):
         # Set up filters for the messages we want to receive
         filters = [
             {"can_id": 0x0CF, "can_mask": 0xFF0},  
@@ -203,8 +220,10 @@ class UbmsBattery(can.Listener):
             {"can_id": 0x360, "can_mask": 0xFF0},
             {"can_id": 0x46A, "can_mask": 0xFF0},
             {"can_id": 0x06A, "can_mask": 0xFF0},
-            {"can_id": 0x76A, "can_mask": 0xFF0},  
+            {"can_id": 0x76A, "can_mask": 0xFF0},
         ]
+        if startup:
+            filters = filters + self.STARTUP_FILTERS
         self._ci.set_filters(filters)
 
     def on_message_received(self, msg):
@@ -347,7 +366,102 @@ class UbmsBattery(can.Listener):
                 self.moduleTemp[iStart + 1] = ((msg.data[4] * 256) + msg.data[5]) * 0.01
             if msg.dlc > 7: 
                 self.moduleTemp[iStart + 2] = ((msg.data[6] * 256) + msg.data[7]) * 0.01
-            # logging.debug("Tmodule %s", ",".join(str(x) for x in self.moduleTemp))   
+            # logging.debug("Tmodule %s", ",".join(str(x) for x in self.moduleTemp))
+
+        elif msg.arbitration_id == 0x184 and not self._startupInfoDone:
+            # module identity, 3 pages per module: byte 0 module number (0xFF = unused),
+            # byte 1 page; pages 1+2 model string, page 3 bytes 2-3 serial (meaning of
+            # bytes 4-7 unknown)
+            module, page = msg.data[0], msg.data[1]
+            if module != 0xFF and page in (1, 2, 3):
+                self._moduleIdPages.setdefault(module, {})[page] = bytes(
+                    msg.data[2 : msg.dlc]
+                )
+                pages = self._moduleIdPages[module]
+                if len(pages) == 3 and module not in self.moduleSerial:
+                    self.moduleModel[module] = (
+                        (pages[1] + pages[2]).split(b"\0")[0].decode("ascii", "replace")
+                    )
+                    self.moduleSerial[module] = pages[3][0:2].hex().upper()
+                    logging.debug(
+                        "Module %d: %s, serial %s, page 3 %s",
+                        module,
+                        self.moduleModel[module],
+                        self.moduleSerial[module],
+                        pages[3].hex().upper(),
+                    )
+
+        elif msg.arbitration_id in [0x67A, 0x67B, 0x67C, 0x67D] and not self._startupInfoDone:
+            # second temperature per module, same layout as 0x76x
+            iStart = (msg.arbitration_id - 0x67A) * 3
+            for k, pos in enumerate(range(2, msg.dlc - 1, 2)):
+                if iStart + k < len(self.moduleTemp2):
+                    self.moduleTemp2[iStart + k] = (
+                        (msg.data[pos] * 256) + msg.data[pos + 1]
+                    ) * 0.01
+            self._moduleTemp2Frames.add(msg.arbitration_id)
+
+        if not self._startupInfoDone and self._startupInfoDeadline:
+            self._check_startup_info()
+
+    def _check_startup_info(self):
+        modules = self.numberOfModulesCommunicating or self.numberOfModules
+        identitiesComplete = len(self.moduleSerial) >= modules
+        temperaturesComplete = all(
+            t is not None for t in self.moduleTemp2[:modules]
+        )
+        timedOut = time.time() > self._startupInfoDeadline
+        if not ((identitiesComplete and temperaturesComplete) or timedOut):
+            return
+
+        self._startupInfoDone = True
+        self._set_operational_filters()
+
+        for m in sorted(self.moduleSerial):
+            t2 = self.moduleTemp2[m - 1] if m - 1 < len(self.moduleTemp2) else None
+            logging.info(
+                "Module %d: %s, serial %s, temperatures %s / %s",
+                m,
+                self.moduleModel[m],
+                self.moduleSerial[m],
+                "%.1fC" % self.moduleTemp[m - 1] if m - 1 < len(self.moduleTemp) else "-",
+                "%.1fC" % t2 if t2 is not None else "-",
+            )
+        if timedOut:
+            logging.warning(
+                "Startup module info incomplete after %ds: %d of %d identities, "
+                "second temperatures %s",
+                self.STARTUP_INFO_TIMEOUT,
+                len(self.moduleSerial),
+                modules,
+                "complete" if temperaturesComplete else "incomplete",
+            )
+
+        # check the module count configured in the driver against the modules found
+        found = sorted(self.moduleSerial)
+        if len(found) != self.numberOfStrings * self.modulesInSeries:
+            logging.warning(
+                "Found %d modules (%s), driver is configured for %d (%dS%dP)",
+                len(found),
+                ",".join(str(m) for m in found),
+                self.numberOfStrings * self.modulesInSeries,
+                self.modulesInSeries,
+                self.numberOfStrings,
+            )
+        elif found != list(range(1, len(found) + 1)):
+            logging.warning(
+                "Module numbers %s are not consecutive from 1, pack voltage needs "
+                "modules 1 to %d in one string",
+                ",".join(str(m) for m in found),
+                self.modulesInSeries,
+            )
+        else:
+            logging.info(
+                "All %d configured modules identified (%dS%dP)",
+                len(found),
+                self.modulesInSeries,
+                self.numberOfStrings,
+            )
 
     # change operational mode of the BMS, valid values see opModes
     # transition between charge and drive only via standby(1-0-2)

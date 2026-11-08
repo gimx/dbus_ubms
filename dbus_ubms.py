@@ -146,6 +146,11 @@ class DbusBatteryService:
         self._dbusservice.add_path(
             "/System/NrOfCellsPerBattery", self._bat.cellsPerModule
         )
+        # module identities, read once at startup (0x184)
+        for m in range(1, self._bat.numberOfModules + 1):
+            self._dbusservice.add_path("/Modules/%d/Serial" % m, None)
+            self._dbusservice.add_path("/Modules/%d/Model" % m, None)
+        self._moduleInfoPublished = False
         self._dbusservice.add_path("/System/MinVoltageCellId", "M_C_")
         self._dbusservice.add_path("/System/MaxVoltageCellId", "M_C_")
         self._dbusservice.add_path("/System/MinCellTemperature", 10.0)
@@ -615,6 +620,13 @@ class DbusBatteryService:
         self._dbusservice["/Info/MaxDischargeCurrent"] = (
             self._bat.maxDischargeCurrent if allowDischarge else 0
         )
+
+        if not self._moduleInfoPublished and self._bat._startupInfoDone:
+            self._moduleInfoPublished = True
+            for m, serial in self._bat.moduleSerial.items():
+                if "/Modules/%d/Serial" % m in self._dbusservice:
+                    self._dbusservice["/Modules/%d/Serial" % m] = serial
+                    self._dbusservice["/Modules/%d/Model" % m] = self._bat.moduleModel[m]
 
         # only update the below every 20s to reduce load
         if datetime.now().second not in [0, 20, 40]:
