@@ -77,24 +77,25 @@ or download the above projects as archives, copy and unzip to root home
  to confirm standby. If the process cannot clean up (SIGKILL, power loss) the U-BMS in VMU slave mode
  falls back to standby by itself 20s after the last mode command.
 
-## GUI v2 pages (local display)
- Two extra pages, modelled after the dbus-serialbattery GUI, are added to the battery page of a U-BMS:
+## GUI (gui-v2 UI plugin)
+ A gui-v2 UI plugin adds two pages, modelled after the dbus-serialbattery GUI, to the device page of
+ the U-BMS battery (Settings → Devices → the battery):
  - U-BMS - General: voltage, current, power, SoC, cell/PCB temperatures, CVL/CCL/DCL, allow to
    charge/discharge, modules online/offline/balancing and the Force charging/discharging off switches
  - U-BMS - Cell Voltages: one row per module with each cell's voltage and deviation from the mean,
    min cell in blue, max cell in red, plus sum, mean, min, max and diff (updated every 20s)
 
- Requires Venus OS v3.60 or later and the overlay-fs app in /data/apps/overlay-fs (installed with
- dbus-serialbattery, or `bash /data/apps/dbus-serialbattery/ext/venus-os_overlay-fs/install.sh`).
+ gui-v2 attaches the pages by product id: the driver publishes /ProductId 0xBA75. This id is
+ provisional and self-chosen, Victron has no public process for assigning ids to third-party drivers.
+ No Victron files are modified. The pages show in the remote console (tested on a Raspberry Pi with
+ Venus OS v3.80, gui-v2 web version). UI plugins need Venus OS v3.70~45 or later and are not officially
+ released functionality yet, so the plugin API may change.
 ```
  bash /data/dbus-ubms/gui-v2-install.sh            # install / update
  bash /data/dbus-ubms/gui-v2-install.sh uninstall  # remove
 ```
- If the dbus-serialbattery GUI is installed, its "General" and "Cell Voltages" entries are hidden for
- the U-BMS (they stay for all other batteries), so the pages do not show up twice.
- The menu entries are inserted into PageBattery.qml, so re-run the install after installing the
- dbus-serialbattery GUI, which overwrites that file. The GUI v2 web version (remote console, VRM) is a
- compiled build and does not show these pages.
+ The compiled plugin `gui-v2/Ubms/Ubms.json` is committed. After editing the QML, rebuild it with
+ `bash gui-v2/build.sh` (needs python3 and Qt `rcc`) and commit the JSON.
 
 ## Configuration of U-BMS
 ```

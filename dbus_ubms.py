@@ -80,7 +80,10 @@ class DbusBatteryService:
 
         # Create the mandatory objects
         self._dbusservice.add_path("/DeviceInstance", deviceinstance)
-        self._dbusservice.add_path("/ProductId", 0)
+        # PROVISIONAL product id, self-chosen (not assigned by Victron, there is no public
+        # registration process; request pending). gui-v2 attaches the plugin pages of
+        # gui-v2/Ubms to devices with this product id, change both together.
+        self._dbusservice.add_path("/ProductId", 0xBA75)
         self._dbusservice.add_path("/ProductName", productname)
         self._dbusservice.add_path("/Manufacturer", "Valence")
         self._dbusservice.add_path("/FirmwareVersion", self._bat.firmwareVersion)
