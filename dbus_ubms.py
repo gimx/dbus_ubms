@@ -93,6 +93,25 @@ class DbusBatteryService:
             writeable=True,
             onchangecallback=self._transmit_mode,
         )
+        # serialbattery compatible control, e.g. for dbus-bms-switcher. The U-BMS has one
+        # contactor for both directions: it is only opened when both are forced off,
+        # a single direction is blocked by reporting its current limit as 0.
+        # Both start at 1, matching standby, so writing 0 always triggers a change.
+        self._dbusservice.add_path("/Settings/HasSettings", 1)
+        self._dbusservice.add_path(
+            "/Settings/ForceChargingOff",
+            1,
+            writeable=True,
+            onchangecallback=self._force_off_changed,
+        )
+        self._dbusservice.add_path(
+            "/Settings/ForceDischargingOff",
+            1,
+            writeable=True,
+            onchangecallback=self._force_off_changed,
+        )
+        self._dbusservice.add_path("/Io/AllowToCharge", 0)
+        self._dbusservice.add_path("/Io/AllowToDischarge", 0)
         self._dbusservice.add_path("/Soh", 100)
         self._dbusservice.add_path("/Capacity", int(capacity))
         self._dbusservice.add_path("/InstalledCapacity", int(capacity))
@@ -238,19 +257,50 @@ class DbusBatteryService:
         # translate values coming from GUI/dbus to U-BMS values
         # returning True accepts the new value on dbus, False rejects it
         mode = self._bat.guiModeKey.get(value)
-
-        # an explicit mode request (e.g. by a BMS switcher) overrides the startup check
-        if self._startupCheckPending:
-            logging.info("Mode set via dbus, cancelling startup check")
-            self._startupCheckPending = False
-
         if mode is None:
             logging.warning(
                 "Unsupported /Mode value %s, use 3 (on/drive) or 252 (standby)", value
             )
             return False
 
-        return self._bat.set_mode(mode)
+        self._cancel_startup_check(path)
+        if not self._bat.set_mode(mode):
+            return False
+        # /Mode itself is set by velib after returning True
+        self._set_force_off_flags(mode)
+        return True
+
+    def _force_off_changed(self, path, value):
+        if value not in (0, 1):
+            return False
+
+        self._cancel_startup_check(path)
+        flags = {
+            p: self._dbusservice[p]
+            for p in ("/Settings/ForceChargingOff", "/Settings/ForceDischargingOff")
+        }
+        flags[path] = value
+        # contactor only opens when both directions are forced off
+        mode = 0 if all(flags.values()) else 2
+        if not self._bat.set_mode(mode):
+            return False
+
+        self._dbusservice["/Mode"] = self._bat.modeGuiKey[mode]
+        logging.info(
+            "%s set to %d, U-BMS %s mode", path, value, self._bat.opModes[mode]
+        )
+        return True
+
+    def _set_force_off_flags(self, mode):
+        flag = 1 if mode == 0 else 0
+        self._dbusservice["/Settings/ForceChargingOff"] = flag
+        self._dbusservice["/Settings/ForceDischargingOff"] = flag
+
+    def _cancel_startup_check(self, path):
+        # an explicit request (e.g. by a BMS switcher) overrides the startup check
+        if self._startupCheckPending:
+            logging.info("%s set via dbus, cancelling startup check", path)
+            self._startupCheckPending = False
 
     # --- startup check: close the contactor only if that is safe ---
 
@@ -386,6 +436,7 @@ class DbusBatteryService:
         )
         if self._bat.set_mode(2):
             self._dbusservice["/Mode"] = self._bat.modeGuiKey[2]
+            self._set_force_off_flags(2)
         return False
 
     def _safe_update(self):
@@ -545,13 +596,21 @@ class DbusBatteryService:
         self._dbusservice["/Dc/0/Power"] = power
         self._dbusservice["/Dc/0/Temperature"] = self._bat.maxCellTemperature
 
-        # in standby the contactor is open, so the battery can neither be charged nor discharged
-        if self._bat.mode & 0x3 == 0:
-            self._dbusservice["/Info/MaxChargeCurrent"] = 0
-            self._dbusservice["/Info/MaxDischargeCurrent"] = 0
-        else:
-            self._dbusservice["/Info/MaxChargeCurrent"] = self._bat.maxChargeCurrent
-            self._dbusservice["/Info/MaxDischargeCurrent"] = self._bat.maxDischargeCurrent
+        # in standby the contactor is open, so the battery can neither be charged nor
+        # discharged, otherwise a direction may be blocked by its force off flag
+        bmsMode = self._bat.mode & 0x3
+        allowCharge = bmsMode != 0 and not self._dbusservice["/Settings/ForceChargingOff"]
+        allowDischarge = (
+            bmsMode == 2 and not self._dbusservice["/Settings/ForceDischargingOff"]
+        )
+        self._dbusservice["/Io/AllowToCharge"] = 1 if allowCharge else 0
+        self._dbusservice["/Io/AllowToDischarge"] = 1 if allowDischarge else 0
+        self._dbusservice["/Info/MaxChargeCurrent"] = (
+            self._bat.maxChargeCurrent if allowCharge else 0
+        )
+        self._dbusservice["/Info/MaxDischargeCurrent"] = (
+            self._bat.maxDischargeCurrent if allowDischarge else 0
+        )
 
         # only update the below every 20s to reduce load
         if datetime.now().second not in [0, 20, 40]:

@@ -60,6 +60,14 @@ or download the above projects as archives, copy and unzip to root home
  dbus -y com.victronenergy.battery.socketcan_can0_di0 /Mode SetValue %252
 ```
 
+ For compatibility with dbus-serialbattery (e.g. dbus-bms-switcher) the driver also provides
+ /Settings/ForceChargingOff, /Settings/ForceDischargingOff (writeable, 0/1) and /Io/AllowToCharge,
+ /Io/AllowToDischarge. The U-BMS has a single contactor for both directions, so it is opened (standby) only
+ when both are forced off. With just one direction forced off the contactor is closed (drive) and that
+ direction is blocked by reporting its current limit as 0. In standby both flags are 1, writing /Mode
+ sets both flags accordingly. /Io/AllowTo(Dis)Charge is 1 when the U-BMS reports a mode allowing it
+ and the direction is not forced off.
+
  With several U-BMS in one system give each instance a different --startup-delay (at least 10s apart),
  instances in standby do not see each other as active, so the first one closing must be visible on dbus
  before the next one does its check.
