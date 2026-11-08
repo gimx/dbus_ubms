@@ -14,6 +14,7 @@ import os
 import dbus
 import itertools
 import math
+import subprocess
 
 from time import time
 from datetime import datetime
@@ -28,7 +29,26 @@ from ubmsbattery import UbmsBattery  # noqa: E402
 from vedbus import VeDbusService  # noqa: E402
 from settingsdevice import SettingsDevice  # noqa: E402
 
-VERSION = "1.2.0"
+
+
+def get_git_version():
+    """Executes git describe to fetch the current git tag/hash of the file directory."""
+    try:
+        script_dir = os.path.dirname(os.path.realpath(__file__))
+        return (
+            subprocess.check_output(
+                ["git", "describe", "--tags", "--always", "--dirty"],
+                cwd=script_dir,
+                stderr=subprocess.DEVNULL,
+            )
+            .decode("utf-8")
+            .strip()
+        )
+    except Exception:
+        return "Unknown"
+
+
+VERSION = get_git_version()
 
 
 def handle_changed_setting(setting, oldvalue, newvalue):
@@ -74,7 +94,7 @@ class DbusBatteryService:
         self._dbusservice.add_path("/Mgmt/ProcessName", __file__)
         self._dbusservice.add_path(
             "/Mgmt/ProcessVersion",
-            VERSION + " running on Python " + platform.python_version(),
+            f"{VERSION} (Python {platform.python_version()})",
         )
         self._dbusservice.add_path("/Mgmt/Connection", connection)
 
