@@ -18,11 +18,12 @@ from time import time
 from datetime import datetime
 from argparse import ArgumentParser
 
-from ubmsbattery import UbmsBattery
-
-
-# our own packages
+# bundled packages (python-can, see ext/VENDORED.md) and velib, must come before
+# importing ubmsbattery; ext first so the bundled python-can is used, not a system one
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), "ext/velib_python"))
+sys.path.insert(1, os.path.join(os.path.dirname(__file__), "ext"))
+
+from ubmsbattery import UbmsBattery  # noqa: E402
 from vedbus import VeDbusService  # noqa: E402
 from ve_utils import exit_on_error  # noqa: E402
 from settingsdevice import SettingsDevice  # noqa: E402

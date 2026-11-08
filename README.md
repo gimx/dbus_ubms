@@ -13,15 +13,15 @@ with git:
 or download the above projects as archives, copy and unzip to root home
 ```
 
-## Preparation on Raspi
-```
- sudo apt-get install libgtk2.0-dev  libdbus-1-dev libgirepository1.0-dev python-gobject python-can
- sudo pip install dbus-python can pygobject
-```
+## Dependencies
+ python-can (with wrapt and typing_extensions) is bundled in ext/, see ext/VENDORED.md, so nothing has to be
+ installed on Venus OS and the driver keeps working after firmware updates (packages installed with opkg
+ are lost on every update). dbus-python and PyGObject are part of Venus OS.
 
-## Preparation on CCGX
+## Preparation on Raspi (development, not Venus OS)
 ```
- dbus_ubms/prep_ubms.sh
+ sudo apt-get install libgtk2.0-dev libdbus-1-dev libgirepository1.0-dev python3-gi
+ sudo pip install dbus-python pygobject
 ```
 
 ## Run from command line
