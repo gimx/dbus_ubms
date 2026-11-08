@@ -38,6 +38,37 @@ or download the above projects as archives, copy and unzip to root home
  svc -u /service/dbus-ubms.can0
 ```
 
+## Standby and startup check
+ The driver acts as VMU master and always starts with the U-BMS in standby mode, i.e. the contactor open,
+ while all data is read and published on dbus. While in standby /State is 14, /Mode is 252 and
+ /Info/MaxChargeCurrent and /Info/MaxDischargeCurrent are reported as 0.
+
+ After --startup-delay seconds (default 10) the driver checks on dbus whether the contactor can be closed.
+ It stays in standby and logs the reason if
+ - the pack voltage does not fit the configured max charge voltage (-v), or
+ - another BMS is active: a battery service with a charge voltage limit (/Info/MaxChargeVoltage) that is
+   connected and not in standby (/State 14 or /Mode 252), or the ActiveBmsService of the system, or
+ - the DC bus is energized (above 5V, as reported by other batteries not in standby, Multis/inverters,
+   chargers, solar chargers, DC-DC converters, ...) with a voltage outside the range of this pack (65-105%
+   of -v) or differing from the pack voltage by more than --max-voltage-delta (default 1.0V).
+ Otherwise it switches to drive mode and closes the contactor. The check is done once only; writing /Mode
+ before it ran (e.g. by a BMS switcher) cancels it.
+
+ Change the mode at any time by writing to /Mode, 3 closes the contactor (drive), 252 opens it (standby):
+```
+ dbus -y com.victronenergy.battery.socketcan_can0_di0 /Mode SetValue %3
+ dbus -y com.victronenergy.battery.socketcan_can0_di0 /Mode SetValue %252
+```
+
+ With several U-BMS in one system give each instance a different --startup-delay (at least 10s apart),
+ instances in standby do not see each other as active, so the first one closing must be visible on dbus
+ before the next one does its check.
+
+ The driver puts the U-BMS into standby (contactor open) whenever it stops: on SIGTERM/SIGINT/SIGHUP
+ (e.g. svc -d), on an unhandled exception and on any other regular exit. It waits up to 3s for the U-BMS
+ to confirm standby. If the process cannot clean up (SIGKILL, power loss) the U-BMS in VMU slave mode
+ falls back to standby by itself 20s after the last mode command.
+
 ## Configuration of U-BMS
 ```
  set SOC calculation to minimum (not average)

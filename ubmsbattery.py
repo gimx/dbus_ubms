@@ -7,7 +7,9 @@ In order for this to work the first x modules of a xSyP pack should have assigne
 The BMS should be operated in slave mode, VMU packages are being sent
 
 """
+import atexit
 import logging
+import time
 import can
 import struct
 
@@ -15,7 +17,9 @@ import struct
 class UbmsBattery(can.Listener):
     opModes = {0: "Standby", 1: "Charge", 2: "Drive"}
 
+    # Victron /Mode values (252 = standby, 3 = on) to U-BMS mode and back
     guiModeKey = {252: 0, 3: 2}
+    modeGuiKey = {0: 252, 2: 3}
 
     opState = {0: 14, 1: 9, 2: 9}
     # Victron BMS states
@@ -29,7 +33,12 @@ class UbmsBattery(can.Listener):
     #  16 pre-charge
     #  17 contactor check
 
-    def __init__(self, voltage, capacity, connection):
+    def __init__(self, voltage, capacity, connection, start_mode=2):
+        """start_mode: U-BMS mode commanded from the very first VMU message,
+        2 = drive (contactor closed), 0 = standby (hot standby, contactor open)"""
+        if start_mode not in self.opModes:
+            raise ValueError("Invalid start mode %r" % start_mode)
+
         self.capacity = capacity
         self.maxChargeVoltage = voltage
         self.numberOfModules = 8
@@ -69,7 +78,11 @@ class UbmsBattery(can.Listener):
         self.numberOfModulesBalancing = 0
         self.numberOfModulesCommunicating = 0
         self.updated = -1
+        self.lastStatusTime = 0
         self.cyclicModeTask = None
+        self.commandedMode = None
+        self._notifier = None
+        self._shutdownDone = False
 
         self._ci = can.interface.Bus(
             channel=connection,
@@ -83,18 +96,30 @@ class UbmsBattery(can.Listener):
         if self._connect_and_verify(connection):
             # Now that we've confirmed connection, update filters for normal operation
             self._set_operational_filters()
-            
-            # Create the periodic message task
-            msg = can.Message(
-                arbitration_id=0x440, data=[0, 2, 0, 0], is_extended_id=False
-            )  # default: drive mode
-            self.cyclicModeTask = self._ci.send_periodic(msg, 1)
-        
+
+            # create a cyclic mode command message simulating a VMU master
+            # a U-BMS in slave mode according to manual section 6.4.1 switches to standby
+            # after 20 seconds of not receiving it
+            self.commandedMode = start_mode
+            self.cyclicModeTask = self._ci.send_periodic(
+                self._mode_message(start_mode), 1
+            )
+            # leave the BMS in standby on any regular interpreter exit,
+            # including uncaught exceptions and sys.exit()
+            atexit.register(self.shutdown)
+            logging.info("Commanding U-BMS %s mode", self.opModes[start_mode])
+
             # Set up the notifier for message callbacks
-            notifier = can.Notifier(self._ci, [self])
+            self._notifier = can.Notifier(self._ci, [self])
 
         else:
             logging.error("Failed to connect to a supported Valence U-BMS")
+
+    @staticmethod
+    def _mode_message(mode):
+        return can.Message(
+            arbitration_id=0x440, data=[0, mode, 0, 0], is_extended_id=False
+        )
     
     def _connect_and_verify(self, connection):
         # check connection, BMS type and that reported system voltage roughly matches configuration
@@ -145,7 +170,7 @@ class UbmsBattery(can.Listener):
                         msg.data[0],
                         self.maxChargeVoltage,
                     )
-                    found = found | 1
+                found = found | 1
 
             elif msg.arbitration_id == 0x180 and found & 4 == 0:
                 self.firmwareVersion = msg.data[0]
@@ -161,20 +186,6 @@ class UbmsBattery(can.Listener):
                 )
 
                 found = found | 4
-
-        if found == 7:
-
-            # msg = can.Message(arbitration_id=0x440, data=[0, self.opMode.get("Standby"), 0, 0], extended_id=False)
-
-            # create a cyclic mode command message simulating a VMU master
-            # a U-BMS in slave mode according to manual section 6.4.1 switches to standby
-            # after 20 seconds of not receiving it
-            msg = can.Message(
-                arbitration_id=0x440, data=[0, 2, 0, 0], is_extended_id=False
-            )  # default: drive mode
-
-            self.cyclicModeTask = self._ci.send_periodic(msg, 1)
-            notifier = can.Notifier(self._ci, [self])
 
         return found == 7
 
@@ -207,6 +218,8 @@ class UbmsBattery(can.Listener):
                 self.numberOfModules = self.numberOfModulesCommunicating
 
             self.numberOfModulesBalancing = msg.data[6]
+            # set last, shutdown() relies on mode being current when this changes
+            self.lastStatusTime = time.time()
 
             if (self.shutdownReason == 0 and msg.data[7] != 0) or self.shutdownReason != msg.data[7]:
                 logging.warning("Shutdown reason 0x%x", msg.data[7])
@@ -330,59 +343,109 @@ class UbmsBattery(can.Listener):
                 self.moduleTemp[iStart + 2] = ((msg.data[6] * 256) + msg.data[7]) * 0.01
             # logging.debug("Tmodule %s", ",".join(str(x) for x in self.moduleTemp))   
 
-    # change operational mode of the BMS, valid values see opModes (accepting strings and numbers)
+    # change operational mode of the BMS, valid values see opModes
     # transition between charge and drive only via standby(1-0-2)
     def set_mode(self, mode):
-
-        if not mode in [0, 1, 2]:
-            logging.warning("Invalid mode requested %s " % str(value))
+        if mode not in self.opModes:
+            logging.warning("Invalid mode requested: %s", mode)
             return False
- 
-        if not isinstance(self.cyclicModeTask, can.ModifiableCyclicTaskABC):
-            msg = can.Message(arbitration_id=0x440, data=[0, mode, 0, 0], extended_id=False)
-            self.cyclicModeTask.modify(msg)
-            
+
+        if self.cyclicModeTask is None or self._shutdownDone:
+            logging.warning(
+                "Cannot change to %s mode, U-BMS not connected", self.opModes[mode]
+            )
+            return False
+
+        if mode == self.commandedMode:
+            return True
+
+        if mode != 0 and self.commandedMode != 0:
+            logging.warning(
+                "Change from %s to %s mode has to go via standby",
+                self.opModes[self.commandedMode],
+                self.opModes[mode],
+            )
+            return False
+
+        msg = self._mode_message(mode)
+        if isinstance(self.cyclicModeTask, can.ModifiableCyclicTaskABC):
+            self.cyclicModeTask.modify_data(msg)
         else:
             self.cyclicModeTask.stop()
-            msg = can.Message(arbitration_id=0x440, data=[0, mode, 0, 0], extended_id=False)
             self.cyclicModeTask = self._ci.send_periodic(msg, 1)
+        # apply right away instead of waiting up to one period
+        self._ci.send(msg)
 
-        logging.info("Changed mode to %s" % self.opModes[mode])
+        self.commandedMode = mode
+        logging.info("Changed mode to %s", self.opModes[mode])
         return True
+
+    def shutdown(self, timeout=3.0):
+        """Leave the U-BMS in standby (contactor open) and release the CAN bus.
+
+        Sends the standby command repeatedly until a status message confirms it
+        or the timeout expires. Safe to call more than once. If the process dies
+        without getting here (SIGKILL, power loss) the U-BMS falls back to
+        standby by itself about 20s after the last mode command.
+        """
+        if self._shutdownDone:
+            return
+        self._shutdownDone = True
+
+        try:
+            if self.cyclicModeTask is not None:
+                self.cyclicModeTask.stop()
+                self.commandedMode = 0
+                msg = self._mode_message(0)
+                requested = time.time()
+                confirmed = False
+                while time.time() - requested < timeout:
+                    try:
+                        self._ci.send(msg)
+                    except can.CanError as e:
+                        logging.error("Failed to send standby command: %s", e)
+                    time.sleep(0.2)
+                    if self.lastStatusTime > requested and self.mode & 0x3 == 0:
+                        confirmed = True
+                        break
+
+                if confirmed:
+                    logging.info("U-BMS confirmed standby mode, contactor open")
+                else:
+                    logging.error(
+                        "U-BMS did not confirm standby within %.0fs, it will fall back "
+                        "to standby about 20s after the last mode command",
+                        timeout,
+                    )
+        finally:
+            if self._notifier is not None:
+                self._notifier.stop()
+            self._ci.shutdown()
 
 
 # === All code below is to simply run it from the commandline for debugging purposes ===
 def main():
-
-    #       logger = can.Logger('logfile.asc')
-
-    bat = UbmsBattery(capacity=650, voltage=29.0, connection="can0")
-
-    listeners = [
-        #               logger,          # Regular Listener object
-        bat
-    ]
-
-    notifier = can.Notifier(bat._ci, listeners)
-    
-    # print out some info about the BMS
-    logging.info("BMS type: %d", bat.bms_type)
-    logging.info("Firmware version: %d", bat.firmwareVersion)
-    logging.info("Hardware version: %d", bat.hw_rev)
-
-    logging.info("Number of modules: %d", bat.numberOfModules)
-    logging.info("Module SOCs: %s", bat.moduleSoc)
-    logging.info("Max cell voltage: %1.3fV", bat.maxCellVoltage)
-    logging.info("Min cell voltage: %1.3fV", bat.minCellVoltage)
-    logging.info("Cell voltages:")
-    for i in range(bat.numberOfModules):
-        logging.info("Module %d: %s", i, bat.cellVoltages[i])  
-
-    # Clean-up
-    notifier.stop()
-    bat._ci.shutdown()
-
     logging.basicConfig(format="%(levelname)-8s %(message)s", level=(logging.DEBUG))
+
+    # start in standby, this is only for reading data
+    bat = UbmsBattery(capacity=650, voltage=29.0, connection="can0", start_mode=0)
+    try:
+        time.sleep(3)
+
+        # print out some info about the BMS
+        logging.info("BMS type: %d", bat.bms_type)
+        logging.info("Firmware version: %d", bat.firmwareVersion)
+        logging.info("Hardware version: %d", bat.hw_rev)
+
+        logging.info("Number of modules: %d", bat.numberOfModules)
+        logging.info("Module SOCs: %s", bat.moduleSoc)
+        logging.info("Max cell voltage: %1.3fV", bat.maxCellVoltage)
+        logging.info("Min cell voltage: %1.3fV", bat.minCellVoltage)
+        logging.info("Cell voltages:")
+        for i in range(bat.numberOfModules):
+            logging.info("Module %d: %s", i, bat.cellVoltages[i])
+    finally:
+        bat.shutdown()
 
 
 if __name__ == "__main__":
