@@ -1,0 +1,7 @@
+[tool.black]
+# keep in sync with max-line-length in .flake8
+line-length = 160
+# vendored third-party packages (python-can, wrapt, typing_extensions, velib_python)
+extend-exclude = '''
+^/ext/
+'''
