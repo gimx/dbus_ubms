@@ -8,6 +8,7 @@ on:
     # Run on any file change
     paths:
       - '**/*.py'
+      - '.github/workflows/analyse.yml'
   pull_request:
     # Run on all branches
     branches:
@@ -15,6 +16,7 @@ on:
     # Run on any file change
     paths:
       - '**/*.py'
+      - '.github/workflows/analyse.yml'
 
 jobs:
   analyse:
@@ -23,23 +25,26 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
 
     - name: Set up Python environment
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v7
       with:
         python-version: "3.10"
 
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v3
+      uses: github/codeql-action/init@v4
       with:
         languages: python
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v3
+      uses: github/codeql-action/analyze@v4
 
     - name: Execute black lint check
       uses: psf/black@stable
 
+    # py-actions/flake8 has no Node 24 release, run flake8 directly (config in .flake8)
     - name: flake8 Lint
-      uses: py-actions/flake8@v2
+      run: |
+        python -m pip install --upgrade flake8
+        flake8 .

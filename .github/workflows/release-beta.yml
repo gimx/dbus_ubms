@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
 
       - name: Replace version string
         run: |
@@ -40,7 +40,7 @@ jobs:
             service/
 
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           files: venus-data.tar.gz
           prerelease: true
